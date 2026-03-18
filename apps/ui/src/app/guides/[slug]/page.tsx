@@ -8,6 +8,8 @@ import Footer from "@/components/landing/footer";
 import { HeroRSC } from "@/components/landing/hero-rsc";
 import { getMarkdownOptions } from "@/lib/utils/markdown";
 
+import { CopyMarkdownButton } from "./copy-markdown-button";
+
 import type { Guide } from "content-collections";
 import type { Metadata } from "next";
 
@@ -30,7 +32,7 @@ export default async function GuidePage({ params }: GuidePageProps) {
 		"@context": "https://schema.org",
 		"@type": "TechArticle",
 		headline: guide.title,
-		description: guide.description || "LLM Gateway integration guide",
+		description: guide.description ?? "LLM Gateway integration guide",
 		datePublished: guide.date,
 		dateModified: guide.date,
 		author: {
@@ -92,12 +94,14 @@ export default async function GuidePage({ params }: GuidePageProps) {
 		<>
 			<script
 				type="application/ld+json"
+				// eslint-disable-next-line @eslint-react/dom/no-dangerously-set-innerhtml
 				dangerouslySetInnerHTML={{
 					__html: JSON.stringify(articleSchema),
 				}}
 			/>
 			<script
 				type="application/ld+json"
+				// eslint-disable-next-line @eslint-react/dom/no-dangerously-set-innerhtml
 				dangerouslySetInnerHTML={{
 					__html: JSON.stringify(breadcrumbSchema),
 				}}
@@ -106,7 +110,7 @@ export default async function GuidePage({ params }: GuidePageProps) {
 			<div className="min-h-screen bg-white text-black dark:bg-black dark:text-white pt-30">
 				<main className="container mx-auto px-4 py-8">
 					<div className="max-w-4xl mx-auto">
-						<div className="mb-8">
+						<div className="mb-8 flex items-center justify-between">
 							<Link
 								href="/guides"
 								className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
@@ -114,6 +118,7 @@ export default async function GuidePage({ params }: GuidePageProps) {
 								<ArrowLeftIcon className="mr-2 h-4 w-4" />
 								Back to guides
 							</Link>
+							<CopyMarkdownButton content={guide.content} />
 						</div>
 
 						<article className="prose prose-lg dark:prose-invert max-w-none">
@@ -130,7 +135,7 @@ export default async function GuidePage({ params }: GuidePageProps) {
 								<div className="mb-8">
 									<Image
 										src={guide.image.src}
-										alt={guide.image.alt || guide.title}
+										alt={guide.image.alt ?? guide.title}
 										width={guide.image.width}
 										height={guide.image.height}
 										className="w-full rounded-lg object-cover"
@@ -175,16 +180,16 @@ export async function generateMetadata({
 
 	return {
 		title: `${guide.title} - Guides - LLM Gateway`,
-		description: guide.description || "LLM Gateway integration guide",
+		description: guide.description ?? "LLM Gateway integration guide",
 		openGraph: {
 			title: `${guide.title} - Guides - LLM Gateway`,
-			description: guide.description || "LLM Gateway integration guide",
+			description: guide.description ?? "LLM Gateway integration guide",
 			type: "article",
 		},
 		twitter: {
 			card: "summary_large_image",
 			title: `${guide.title} - Guides - LLM Gateway`,
-			description: guide.description || "LLM Gateway integration guide",
+			description: guide.description ?? "LLM Gateway integration guide",
 		},
 	};
 }

@@ -11,8 +11,10 @@ import {
 	PanelTop,
 	BarChart3,
 	PenLine,
+	ShieldCheck,
 	Sparkles,
 	Github,
+	Play,
 } from "lucide-react";
 import Image from "next/image";
 import { useState, useCallback } from "react";
@@ -26,6 +28,7 @@ interface Template {
 	description: string;
 	href: string;
 	demoUrl: string;
+	demoLabel?: string;
 	image: string;
 	icon: typeof ImageIcon;
 	tags: string[];
@@ -91,6 +94,18 @@ const templates: Template[] = [
 		tags: ["TypeScript", "Next.js", "AI SDK"],
 		gradient: "from-rose-500/20 via-pink-500/20 to-fuchsia-500/20",
 	},
+	{
+		name: "QA Agent",
+		description:
+			"AI-powered QA testing agent that uses browser automation to interact with your running web app. Describe tests in plain English and watch it execute step-by-step with a real-time action timeline.",
+		href: "https://github.com/theopenco/llmgateway-templates/tree/main/templates/qa-agent",
+		demoUrl: "https://youtu.be/-ai9eVvXvZE",
+		demoLabel: "Watch Demo",
+		image: "/templates/qa-agent.png",
+		icon: ShieldCheck,
+		tags: ["TypeScript", "Next.js", "AI SDK"],
+		gradient: "from-cyan-500/20 via-teal-500/20 to-blue-500/20",
+	},
 ];
 
 export function TemplateCards() {
@@ -98,7 +113,7 @@ export function TemplateCards() {
 
 	const copyToClipboard = useCallback((url: string) => {
 		const templateName = url.split("/").pop();
-		navigator.clipboard.writeText(
+		void navigator.clipboard.writeText(
 			`npx @llmgateway/cli init --template ${templateName}`,
 		);
 		setCopiedUrl(url);
@@ -188,8 +203,12 @@ export function TemplateCards() {
 									target="_blank"
 									rel="noopener noreferrer"
 								>
-									<ExternalLink className="h-4 w-4" />
-									Live Demo
+									{template.demoLabel ? (
+										<Play className="h-4 w-4" />
+									) : (
+										<ExternalLink className="h-4 w-4" />
+									)}
+									{template.demoLabel ?? "Live Demo"}
 									<ArrowUpRight className="h-4 w-4 opacity-50 group-hover:opacity-100 transition-opacity" />
 								</a>
 							</Button>

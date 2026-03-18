@@ -25,3 +25,7 @@ benchmark_results.json
 *.db
 *.csv
 exports/
+out-*.json
+output-*.png
+generate-image-*.png
+.playwright-mcp

@@ -33,15 +33,15 @@ export function getStreamingTimeoutMs(): number {
  * Gets the AI API request timeout for non-streaming (plain) requests.
  * Non-streaming requests have a shorter default timeout since they don't benefit
  * from incremental responses and long waits are usually indicative of issues.
- * Default: 80 seconds (80000ms)
+ * Default: 3 minutes (180000ms)
  */
 export function getTimeoutMs(): number {
 	const envValue = Number(process.env.AI_TIMEOUT_MS);
 	if (envValue > 0) {
 		return envValue;
 	}
-	// Default: 80 seconds for non-streaming requests
-	return 80000;
+	// Default: 3 minutes for non-streaming requests
+	return 180000;
 }
 
 // Legacy exports for backwards compatibility (read at module load time)
@@ -85,7 +85,7 @@ export function createStreamingCombinedSignal(
 
 /**
  * Combines a plain (non-streaming) timeout signal with an optional cancellation signal.
- * Uses the shorter timeout (default 80s) for non-streaming requests.
+ * Uses the shorter timeout (default 3min) for non-streaming requests.
  */
 export function createCombinedSignal(
 	cancellationController?: AbortController,

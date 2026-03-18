@@ -100,7 +100,7 @@ export function OnboardingWizard() {
 		if (!apiKey) {
 			return;
 		}
-		navigator.clipboard.writeText(apiKey);
+		void navigator.clipboard.writeText(apiKey);
 		setCopied(true);
 		posthog.capture("onboarding_api_key_copied");
 		setTimeout(() => setCopied(false), 2000);
@@ -130,27 +130,75 @@ export function OnboardingWizard() {
 					model: "auto",
 					messages: [{ role: "user", content: prompt.trim() }],
 					max_tokens: 200,
+					stream: true,
 					free_models_only: true,
 					onboarding: true,
 				}),
 				signal: controller.signal,
 			});
 
-			const data = await res.json();
-
 			if (!res.ok) {
-				const errorMsg = data.error?.message || "Request failed";
+				const data = await res.json();
+				const errorMsg = data.error?.message ?? "Request failed";
 				setTryError(errorMsg);
 				posthog.capture("onboarding_try_error", { error: errorMsg });
 				return;
 			}
 
-			const content =
-				data.choices?.[0]?.message?.content || "No response received";
-			setTryResponse(content);
+			const reader = res.body?.getReader();
+			if (!reader) {
+				setTryError("Streaming not supported.");
+				return;
+			}
+
+			const decoder = new TextDecoder();
+			let accumulated = "";
+			let model = "auto";
+			let buffer = "";
+
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) {
+					break;
+				}
+
+				buffer += decoder.decode(value, { stream: true });
+				const lines = buffer.split("\n");
+				buffer = lines.pop() ?? "";
+
+				for (const line of lines) {
+					const trimmed = line.trim();
+					if (!trimmed || !trimmed.startsWith("data: ")) {
+						continue;
+					}
+
+					const data = trimmed.slice(6);
+					if (data === "[DONE]") {
+						continue;
+					}
+
+					try {
+						const parsed = JSON.parse(data);
+						const delta = parsed.choices?.[0]?.delta?.content;
+						if (delta) {
+							accumulated += delta;
+							setTryResponse(accumulated);
+						}
+						if (parsed.model) {
+							model = parsed.model;
+						}
+					} catch {
+						// Skip malformed chunks
+					}
+				}
+			}
+
+			if (!accumulated) {
+				setTryResponse("No response received");
+			}
 			setTriedApi(true);
 			posthog.capture("onboarding_try_success", {
-				model: data.model || "auto",
+				model,
 				responseTimeMs: Date.now() - startTime,
 			});
 		} catch (err) {
@@ -281,7 +329,12 @@ export function OnboardingWizard() {
 								<p className="text-xs font-medium text-muted-foreground mb-2">
 									Response
 								</p>
-								<p className="text-sm whitespace-pre-wrap">{tryResponse}</p>
+								<p className="text-sm whitespace-pre-wrap">
+									{tryResponse}
+									{tryLoading && (
+										<span className="inline-block w-1.5 h-4 bg-foreground/70 animate-pulse ml-0.5 align-text-bottom" />
+									)}
+								</p>
 							</div>
 						)}
 					</CardContent>

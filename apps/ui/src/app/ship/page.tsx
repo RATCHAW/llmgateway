@@ -52,6 +52,13 @@ const templates = [
 		command: "npx @llmgateway/cli init --template og-image-generator",
 		tags: ["Next.js", "AI SDK", "Structured Output"],
 	},
+	{
+		name: "QA Agent",
+		description:
+			"AI-powered QA testing agent with browser automation and real-time action timeline.",
+		command: "npx @llmgateway/cli init --template qa-agent",
+		tags: ["Next.js", "AI SDK", "Browser Automation"],
+	},
 ];
 
 const steps = [

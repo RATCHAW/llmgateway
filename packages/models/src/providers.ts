@@ -322,6 +322,28 @@ export const providers = [
 		apiKeyInstructions:
 			"Use AWS Bedrock Long-Term API Keys (not IAM service account or private keys)",
 		learnMore: "https://docs.llmgateway.io/integrations/aws-bedrock",
+		regionConfig: {
+			optionsKey: "aws_bedrock_region",
+			defaultRegion: "us-east-1",
+			regions: [
+				{ id: "us-east-1", label: "US East (N. Virginia, default)" },
+				{ id: "us-west-2", label: "US West (Oregon)" },
+				{ id: "eu-west-1", label: "Europe (Ireland)" },
+				{ id: "eu-central-1", label: "Europe (Frankfurt)" },
+				{ id: "ap-northeast-1", label: "Asia Pacific (Tokyo)" },
+				{ id: "ap-southeast-1", label: "Asia Pacific (Singapore)" },
+			],
+			endpointMap: {
+				"us-east-1": "https://bedrock-runtime.us-east-1.amazonaws.com",
+				"us-west-2": "https://bedrock-runtime.us-west-2.amazonaws.com",
+				"eu-west-1": "https://bedrock-runtime.eu-west-1.amazonaws.com",
+				"eu-central-1": "https://bedrock-runtime.eu-central-1.amazonaws.com",
+				"ap-northeast-1":
+					"https://bedrock-runtime.ap-northeast-1.amazonaws.com",
+				"ap-southeast-1":
+					"https://bedrock-runtime.ap-southeast-1.amazonaws.com",
+			},
+		},
 	},
 	{
 		id: "azure",

@@ -422,6 +422,13 @@ export const apiKeyIamRule = pgTable(
 
 export interface ProviderKeyOptions {
 	aws_bedrock_region_prefix?: "us." | "global." | "eu.";
+	aws_bedrock_region?:
+		| "us-east-1"
+		| "us-west-2"
+		| "eu-west-1"
+		| "eu-central-1"
+		| "ap-northeast-1"
+		| "ap-southeast-1";
 	azure_resource?: string;
 	azure_api_version?: string;
 	azure_deployment_type?: "openai" | "ai-foundry";

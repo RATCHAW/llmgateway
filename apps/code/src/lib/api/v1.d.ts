@@ -3682,6 +3682,8 @@ export interface paths {
                                 options: {
                                     /** @enum {string} */
                                     aws_bedrock_region_prefix?: "us." | "global." | "eu.";
+                                    /** @enum {string} */
+                                    aws_bedrock_region?: "us-east-1" | "us-west-2" | "eu-west-1" | "eu-central-1" | "ap-northeast-1" | "ap-southeast-1";
                                     azure_resource?: string;
                                     azure_api_version?: string;
                                     /** @enum {string} */
@@ -3719,6 +3721,8 @@ export interface paths {
                         options?: {
                             /** @enum {string} */
                             aws_bedrock_region_prefix?: "us." | "global." | "eu.";
+                            /** @enum {string} */
+                            aws_bedrock_region?: "us-east-1" | "us-west-2" | "eu-west-1" | "eu-central-1" | "ap-northeast-1" | "ap-southeast-1";
                             azure_resource?: string;
                             azure_api_version?: string;
                             /** @enum {string} */
@@ -3749,6 +3753,8 @@ export interface paths {
                                 options: {
                                     /** @enum {string} */
                                     aws_bedrock_region_prefix?: "us." | "global." | "eu.";
+                                    /** @enum {string} */
+                                    aws_bedrock_region?: "us-east-1" | "us-west-2" | "eu-west-1" | "eu-central-1" | "ap-northeast-1" | "ap-southeast-1";
                                     azure_resource?: string;
                                     azure_api_version?: string;
                                     /** @enum {string} */
@@ -3867,6 +3873,8 @@ export interface paths {
                                 options: {
                                     /** @enum {string} */
                                     aws_bedrock_region_prefix?: "us." | "global." | "eu.";
+                                    /** @enum {string} */
+                                    aws_bedrock_region?: "us-east-1" | "us-west-2" | "eu-west-1" | "eu-central-1" | "ap-northeast-1" | "ap-southeast-1";
                                     azure_resource?: string;
                                     azure_api_version?: string;
                                     /** @enum {string} */

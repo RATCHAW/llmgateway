@@ -200,12 +200,14 @@ export function getProviderEndpoint(
 				break;
 			case "aws-bedrock":
 				url =
+					regionBaseUrl ??
 					getProviderEnvValue(
 						"aws-bedrock",
 						"baseUrl",
 						configIndex,
 						"https://bedrock-runtime.us-east-1.amazonaws.com",
-					) ?? "https://bedrock-runtime.us-east-1.amazonaws.com";
+					) ??
+					"https://bedrock-runtime.us-east-1.amazonaws.com";
 				break;
 			case "azure": {
 				const resource =
@@ -294,10 +296,19 @@ export function getProviderEndpoint(
 			}
 			return `${url}/api/paas/v4/chat/completions`;
 		case "aws-bedrock": {
-			const prefix =
-				providerKeyOptions?.aws_bedrock_region_prefix ??
-				getProviderEnvValue("aws-bedrock", "region", configIndex, "global.") ??
-				"global.";
+			// When a specific region is selected (via regionConfig), call the
+			// regional endpoint directly — no cross-region inference prefix needed.
+			// Fall back to the legacy prefix for backward compatibility.
+			const prefix = region
+				? ""
+				: (providerKeyOptions?.aws_bedrock_region_prefix ??
+					getProviderEnvValue(
+						"aws-bedrock",
+						"region",
+						configIndex,
+						"global.",
+					) ??
+					"global.");
 
 			const endpoint = stream ? "converse-stream" : "converse";
 			return `${url}/model/${prefix}${modelName}/${endpoint}`;

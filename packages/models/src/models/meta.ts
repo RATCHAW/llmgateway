@@ -21,6 +21,7 @@ export const metaModels = [
 				vision: false,
 				tools: false,
 				jsonOutput: false,
+				regions: [{ id: "us-east-1" }, { id: "us-west-2" }],
 			},
 			{
 				providerId: "nebius",
@@ -118,6 +119,7 @@ export const metaModels = [
 				vision: false,
 				tools: false,
 				jsonOutput: false,
+				regions: [{ id: "us-east-1" }, { id: "us-west-2" }],
 			},
 		],
 	},
@@ -335,6 +337,7 @@ export const metaModels = [
 				vision: true,
 				tools: false,
 				jsonOutput: false,
+				regions: [{ id: "us-east-1" }, { id: "us-west-2" }],
 			},
 			{
 				providerId: "novita",
@@ -372,6 +375,7 @@ export const metaModels = [
 				vision: true,
 				tools: false,
 				jsonOutput: false,
+				regions: [{ id: "us-east-1" }, { id: "us-west-2" }],
 			},
 			{
 				providerId: "novita",

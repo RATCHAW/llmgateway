@@ -10,6 +10,26 @@ import {
 
 import type { ProviderKeyOptions } from "@llmgateway/db";
 
+/**
+ * Derive the AWS Bedrock cross-region inference prefix from a region ID.
+ * Many newer models are only available through cross-region inference profiles.
+ */
+function bedrockRegionPrefix(region: string): string {
+	if (region.startsWith("us-")) {
+		return "us.";
+	}
+	if (region.startsWith("eu-")) {
+		return "eu.";
+	}
+	if (region.startsWith("ap-")) {
+		return "apac.";
+	}
+	if (region.startsWith("me-")) {
+		return "apac.";
+	}
+	return "us.";
+}
+
 function buildVertexCompatibleEndpoint(
 	provider: "google-vertex" | "quartz",
 	url: string,
@@ -296,11 +316,12 @@ export function getProviderEndpoint(
 			}
 			return `${url}/api/paas/v4/chat/completions`;
 		case "aws-bedrock": {
-			// When a specific region is selected (via regionConfig), call the
-			// regional endpoint directly — no cross-region inference prefix needed.
-			// Fall back to the legacy prefix for backward compatibility.
+			// When a specific region is selected (via regionConfig), derive the
+			// cross-region inference prefix from the region. Many newer models
+			// (Claude Sonnet 4, Opus 4.5, etc.) are CR-only and require a prefix.
+			// Fall back to the legacy explicit prefix for backward compatibility.
 			const prefix = region
-				? ""
+				? bedrockRegionPrefix(region)
 				: (providerKeyOptions?.aws_bedrock_region_prefix ??
 					getProviderEnvValue(
 						"aws-bedrock",

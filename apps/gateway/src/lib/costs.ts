@@ -118,6 +118,16 @@ export async function calculateCosts(
 		) as ModelDefinition;
 	}
 
+	// Fallback: search expanded providers for region-suffixed model names
+	// (e.g., "anthropic.claude-3-5-haiku-20241022-v1:0:us-east-1")
+	if (!modelInfo) {
+		modelInfo = models.find((m) =>
+			expandAllProviderRegions(m.providers as ProviderModelMapping[]).some(
+				(p) => p.modelName === model,
+			),
+		) as ModelDefinition;
+	}
+
 	if (!modelInfo) {
 		return {
 			inputCost: null,

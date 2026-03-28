@@ -891,7 +891,7 @@ describe("fallback and error status code handling", () => {
 			const logs = await waitForLogs(1);
 			expect(logs).toHaveLength(1);
 			expect(logs[0].usedProvider).toBe("alibaba");
-			expect(logs[0].usedModel).toBe("alibaba/glm-4.6:cn-beijing");
+			expect(logs[0].usedModel).toBe("alibaba/glm-4.6");
 			expect(logs[0].routingMetadata?.selectedProvider).toBe("alibaba");
 			expect(logs[0].routingMetadata?.selectionReason).toBe(
 				"low-uptime-fallback",
@@ -1017,7 +1017,7 @@ describe("fallback and error status code handling", () => {
 				logs.find((entry) => entry.requestedModel === "glm-4.6") ?? logs.at(-1);
 			expect(log).toBeTruthy();
 			expect(log?.usedProvider).toBe("alibaba");
-			expect(log?.usedModel).toBe("alibaba/glm-4.6:cn-beijing");
+			expect(log?.usedModel).toBe("alibaba/glm-4.6");
 			const alibabaScores =
 				log?.routingMetadata?.providerScores?.filter(
 					(score) => score.providerId === "alibaba",
@@ -1307,6 +1307,7 @@ describe("fallback and error status code handling", () => {
 			expect(res.status).toBe(200);
 
 			const logs = await waitForLogs(1);
+			expect(logs[0].usedModel).toBe("alibaba/deepseek-v3.2");
 			const alibabaScores =
 				logs[0].routingMetadata?.providerScores?.filter(
 					(score) => score.providerId === "alibaba",

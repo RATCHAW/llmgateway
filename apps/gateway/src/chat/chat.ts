@@ -173,18 +173,18 @@ function filterRegionsByAvailableKeys(
 	});
 }
 
-function preferConcreteRegionalMappings(
+function preferProviderRootMappings(
 	providers: ProviderModelMapping[],
 ): ProviderModelMapping[] {
-	const providersWithRegions = new Set(
+	const providersWithRootMappings = new Set(
 		providers
-			.filter((mapping) => mapping.region)
+			.filter((mapping) => !mapping.region)
 			.map((mapping) => mapping.providerId),
 	);
 
 	return providers.filter(
 		(mapping) =>
-			!providersWithRegions.has(mapping.providerId) || Boolean(mapping.region),
+			!providersWithRootMappings.has(mapping.providerId) || !mapping.region,
 	);
 }
 
@@ -1102,7 +1102,7 @@ chat.openapi(completions, async (c) => {
 			}
 			const candidateAllowedProviders = candidateIam.allowedProviders;
 
-			const candidateProviders = preferConcreteRegionalMappings(
+			const candidateProviders = preferProviderRootMappings(
 				project.mode === "credits"
 					? filterRegionsByAvailableKeys(
 							expandAllProviderRegions(
@@ -1622,9 +1622,7 @@ chat.openapi(completions, async (c) => {
 			const currentUptime = metrics.uptime;
 			// Get available providers for routing
 			const providerIds = modelInfo.providers
-				.filter(
-					(p) => !(p.providerId === usedProvider && p.region === usedRegion),
-				) // Exclude the exact low-uptime provider+region pair
+				.filter((p) => p.providerId !== usedProvider)
 				.map((p) => p.providerId);
 
 			if (providerIds.length > 0) {
@@ -1645,7 +1643,7 @@ chat.openapi(completions, async (c) => {
 				// If web search is requested, also filter to providers that support it
 				// If JSON output is requested, also filter to providers that support it
 				const availableModelProviders = filterEligibleModelProviders(
-					preferConcreteRegionalMappings(expandedIamFilteredModelProviders),
+					preferProviderRootMappings(expandedIamFilteredModelProviders),
 					{
 						allProviderVariants: modelInfo.providers,
 						availableProviders,
@@ -1655,13 +1653,7 @@ chat.openapi(completions, async (c) => {
 						maxTokens: max_tokens,
 						reasoningEffort: reasoning_effort,
 					},
-				).filter(
-					(provider) =>
-						!(
-							provider.providerId === usedProvider &&
-							provider.region === usedRegion
-						),
-				);
+				).filter((provider) => provider.providerId !== usedProvider);
 
 				if (availableModelProviders.length > 0) {
 					const rawModelForFallback = models.find((m) => m.id === baseModelId);
@@ -1808,7 +1800,7 @@ chat.openapi(completions, async (c) => {
 
 			// Filter model providers to only those eligible for this request
 			const availableModelProviders = filterEligibleModelProviders(
-				preferConcreteRegionalMappings(expandedIamFilteredModelProviders),
+				preferProviderRootMappings(expandedIamFilteredModelProviders),
 				{
 					allProviderVariants: modelInfo.providers,
 					availableProviders,
@@ -1952,7 +1944,10 @@ chat.openapi(completions, async (c) => {
 			selectionReason = "fallback-first-available";
 		}
 
-		let routingMetadataProviders = allModelProviders;
+		let routingMetadataProviders =
+			selectionReason === "direct-provider-specified"
+				? allModelProviders
+				: preferProviderRootMappings(allModelProviders);
 		let directProviderRegionWasExplicit = false;
 
 		if (
@@ -2150,9 +2145,13 @@ chat.openapi(completions, async (c) => {
 
 	// Create the model mapping values according to new schema
 	let usedModelMapping = usedModel; // Store the original provider model name
+	const includeUsedModelRegion =
+		routingMetadata?.selectionReason === "direct-provider-specified";
 	let usedModelFormatted = formatUsedModelForDisplay(
 		usedProvider,
-		usedRegion ? `${baseModelName}:${usedRegion}` : baseModelName,
+		includeUsedModelRegion && usedRegion
+			? `${baseModelName}:${usedRegion}`
+			: baseModelName,
 		customProviderName,
 	); // Store in LLMGateway format
 
@@ -2685,7 +2684,7 @@ chat.openapi(completions, async (c) => {
 		);
 
 		// If region is still unset but the provider supports regions, resolve the
-		// default region so it appears in logs and metadata.
+		// default region for request execution.
 		if (!usedRegion) {
 			const providerDef = providers.find((p) => p.id === usedProvider) as
 				| { regionConfig?: { defaultRegion: string } }
@@ -2696,7 +2695,7 @@ chat.openapi(completions, async (c) => {
 		}
 
 		// Re-compute usedModelFormatted now that region may have been resolved
-		if (usedRegion) {
+		if (includeUsedModelRegion && usedRegion) {
 			usedModelFormatted = formatUsedModelForDisplay(
 				usedProvider,
 				`${baseModelName}:${usedRegion}`,

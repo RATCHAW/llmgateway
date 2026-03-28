@@ -1932,6 +1932,8 @@ export async function prepareRequestBody(
 
 					requestBody.thinking_budget = getThinkingBudget(reasoning_effort);
 				}
+			} else if (reasoning_effort !== undefined) {
+				requestBody.reasoning_effort = reasoning_effort;
 			}
 			break;
 		}

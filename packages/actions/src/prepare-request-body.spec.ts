@@ -690,6 +690,32 @@ describe("prepareRequestBody - Alibaba", () => {
 		expect(requestBody.thinking_budget).toBe(8192);
 		expect(requestBody).not.toHaveProperty("reasoning_effort");
 	});
+
+	test("should preserve reasoning_effort for non-DeepSeek Alibaba models", async () => {
+		const requestBody = (await prepareRequestBody(
+			"alibaba",
+			"qwen3-vl-235b-a22b-thinking",
+			[{ role: "user", content: "Solve this carefully" }],
+			false,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"high",
+			true,
+			false,
+		)) as unknown as {
+			enable_thinking?: boolean;
+			reasoning_effort?: string;
+		};
+
+		expect(requestBody.reasoning_effort).toBe("high");
+		expect(requestBody).not.toHaveProperty("enable_thinking");
+	});
 });
 
 describe("prepareRequestBody - AWS Bedrock", () => {

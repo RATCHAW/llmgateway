@@ -1162,6 +1162,7 @@ describe("api", () => {
 	});
 
 	test("Reasoning effort error for unsupported model", async () => {
+		const requestId = "reasoning-effort-unsupported-request-id";
 		await db.insert(tables.apiKey).values({
 			id: "token-id",
 			token: "real-token",
@@ -1174,6 +1175,7 @@ describe("api", () => {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
+				"x-request-id": requestId,
 				Authorization: `Bearer real-token`,
 			},
 			body: JSON.stringify({
@@ -1192,6 +1194,16 @@ describe("api", () => {
 
 		const json = await res.json();
 		expect(json.message).toContain("does not support reasoning");
+
+		const log = await waitForLogByRequestId(requestId);
+		expect(log.finishReason).toBe("client_error");
+		expect(log.unifiedFinishReason).toBe("client_error");
+
+		const matchingLogs = await db
+			.select()
+			.from(tables.log)
+			.where(eq(tables.log.requestId, requestId));
+		expect(matchingLogs).toHaveLength(1);
 	});
 
 	test("Max tokens validation error when exceeding model limit", async () => {

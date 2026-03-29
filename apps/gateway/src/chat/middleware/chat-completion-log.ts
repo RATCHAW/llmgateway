@@ -146,12 +146,16 @@ export const chatCompletionLogMiddleware = createMiddleware<ServerTypes>(
 			state.caughtError = error;
 			throw error;
 		} finally {
-			void flushChatCompletionLogs(c, state).catch((error) => {
-				logger.error(
-					"Unexpected failure flushing queued chat completion logs",
-					error instanceof Error ? error : new Error(String(error)),
-				);
-			});
+			if (state.streamCompletion) {
+				void flushChatCompletionLogs(c, state).catch((error) => {
+					logger.error(
+						"Unexpected failure flushing queued chat completion logs",
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				});
+			} else {
+				await flushChatCompletionLogs(c, state);
+			}
 		}
 	},
 );

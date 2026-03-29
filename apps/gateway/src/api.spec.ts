@@ -1,11 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 
-import { db, tables } from "@llmgateway/db";
+import { db, eq, tables } from "@llmgateway/db";
 import { logger } from "@llmgateway/logger";
 
 import { app } from "./app.js";
 import { createGatewayApiTestHarness } from "./test-utils/gateway-api-test-harness.js";
-import { readAll, waitForLogs } from "./test-utils/test-helpers.js";
+import {
+	readAll,
+	processPendingLogs,
+	waitForLogByRequestId,
+	waitForLogs,
+} from "./test-utils/test-helpers.js";
 
 describe("api", () => {
 	const harness = createGatewayApiTestHarness({
@@ -1343,10 +1348,12 @@ describe("api", () => {
 
 	// test for missing Authorization header
 	test("/v1/chat/completions missing Authorization header", async () => {
+		const requestId = "missing-auth-request-id";
 		const res = await app.request("/v1/chat/completions", {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
+				"x-request-id": requestId,
 				// Intentionally not setting Authorization header
 			},
 			body: JSON.stringify({
@@ -1360,6 +1367,13 @@ describe("api", () => {
 			}),
 		});
 		expect(res.status).toBe(401);
+
+		await processPendingLogs();
+		const logs = await db
+			.select()
+			.from(tables.log)
+			.where(eq(tables.log.requestId, requestId));
+		expect(logs).toHaveLength(0);
 	});
 
 	// test for explicitly specifying a provider in the format "provider/model"
@@ -1483,6 +1497,7 @@ describe("api", () => {
 
 	// test for missing provider API key
 	test("/v1/chat/completions with missing provider API key", async () => {
+		const requestId = "missing-provider-key-request-id";
 		await db.insert(tables.apiKey).values({
 			id: "token-id",
 			token: "real-token",
@@ -1495,6 +1510,7 @@ describe("api", () => {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
+				"x-request-id": requestId,
 				Authorization: `Bearer real-token`,
 			},
 			body: JSON.stringify({
@@ -1512,6 +1528,16 @@ describe("api", () => {
 		expect(errorMessage).toMatchInlineSnapshot(
 			`"{"error":true,"status":400,"message":"No provider key set for any of the providers that support model gpt-4o-mini. Please add the provider key in the settings or switch the project mode to credits or hybrid."}"`,
 		);
+
+		const log = await waitForLogByRequestId(requestId);
+		expect(log.finishReason).toBe("client_error");
+		expect(log.unifiedFinishReason).toBe("client_error");
+
+		const matchingLogs = await db
+			.select()
+			.from(tables.log)
+			.where(eq(tables.log.requestId, requestId));
+		expect(matchingLogs).toHaveLength(1);
 	});
 
 	// test for provider error response and error logging

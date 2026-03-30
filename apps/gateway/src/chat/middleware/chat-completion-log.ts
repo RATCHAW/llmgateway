@@ -5,7 +5,7 @@ import {
 	buildBaseLogEntry,
 	type ChatCompletionLogState,
 } from "@/chat/tools/chat-log-context.js";
-import { insertLog as _insertLog } from "@/lib/logs.js";
+import { insertLog } from "@/lib/logs.js";
 
 import { logger } from "@llmgateway/logger";
 
@@ -117,7 +117,7 @@ async function flushChatCompletionLogs(
 
 	for (const logData of state.pendingLogs) {
 		try {
-			await _insertLog({
+			await insertLog({
 				...logData,
 				internalContentFilter: state.internalContentFilter
 					? true

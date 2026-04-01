@@ -3920,7 +3920,7 @@ chat.openapi(completions, async (c) => {
 							if (willRetryTimeout) {
 								routingAttempts.push({
 									provider: usedProvider,
-									model: baseModelName,
+									model: usedModelMapping,
 									...(usedRegion && { region: usedRegion }),
 									status_code: 0,
 									error_type: getErrorType(0),
@@ -4210,7 +4210,7 @@ chat.openapi(completions, async (c) => {
 							if (willRetryFetch) {
 								routingAttempts.push({
 									provider: usedProvider,
-									model: baseModelName,
+									model: usedModelMapping,
 									...(usedRegion && { region: usedRegion }),
 									status_code: 0,
 									error_type: getErrorType(0),
@@ -4399,7 +4399,7 @@ chat.openapi(completions, async (c) => {
 						if (willRetryHttpError) {
 							routingAttempts.push({
 								provider: usedProvider,
-								model: baseModelName,
+								model: usedModelMapping,
 								...(usedRegion && { region: usedRegion }),
 								status_code: res.status,
 								error_type: getErrorType(res.status),
@@ -4478,7 +4478,7 @@ chat.openapi(completions, async (c) => {
 				if (res && res.ok && usedProvider) {
 					routingAttempts.push({
 						provider: usedProvider,
-						model: baseModelName,
+						model: usedModelMapping,
 						...(usedRegion && { region: usedRegion }),
 						status_code: res.status,
 						error_type: "none",
@@ -4492,13 +4492,15 @@ chat.openapi(completions, async (c) => {
 					const failedMap = new Map(
 						routingAttempts
 							.filter((a) => !a.succeeded)
-							.map((f) => [f.provider, f]),
+							.map((f) => [providerRetryKey(f.provider, f.region), f]),
 					);
 					routingMetadata = {
 						...routingMetadata,
 						routing: routingAttempts,
 						providerScores: routingMetadata.providerScores.map((score) => {
-							const failure = failedMap.get(score.providerId);
+							const failure = failedMap.get(
+								providerRetryKey(score.providerId, score.region),
+							);
 							if (failure) {
 								return {
 									...score,
@@ -6984,7 +6986,7 @@ chat.openapi(completions, async (c) => {
 			if (willRetryFetchNonStreaming) {
 				routingAttempts.push({
 					provider: usedProvider,
-					model: baseModelName,
+					model: usedModelMapping,
 					...(usedRegion && { region: usedRegion }),
 					status_code: 0,
 					error_type: getErrorType(0),
@@ -7421,7 +7423,7 @@ chat.openapi(completions, async (c) => {
 			if (willRetryHttpNonStreaming) {
 				routingAttempts.push({
 					provider: usedProvider,
-					model: baseModelName,
+					model: usedModelMapping,
 					...(usedRegion && { region: usedRegion }),
 					status_code: res.status,
 					error_type: getErrorType(res.status),
@@ -7501,7 +7503,7 @@ chat.openapi(completions, async (c) => {
 	if (res && res.ok && usedProvider) {
 		routingAttempts.push({
 			provider: usedProvider,
-			model: baseModelName,
+			model: usedModelMapping,
 			...(usedRegion && { region: usedRegion }),
 			status_code: res.status,
 			error_type: "none",
@@ -7513,13 +7515,17 @@ chat.openapi(completions, async (c) => {
 	if (routingMetadata) {
 		// Enrich providerScores with failure info from routing attempts
 		const failedMap = new Map(
-			routingAttempts.filter((a) => !a.succeeded).map((f) => [f.provider, f]),
+			routingAttempts
+				.filter((a) => !a.succeeded)
+				.map((f) => [providerRetryKey(f.provider, f.region), f]),
 		);
 		routingMetadata = {
 			...routingMetadata,
 			routing: routingAttempts,
 			providerScores: routingMetadata.providerScores.map((score) => {
-				const failure = failedMap.get(score.providerId);
+				const failure = failedMap.get(
+					providerRetryKey(score.providerId, score.region),
+				);
 				if (failure) {
 					return {
 						...score,

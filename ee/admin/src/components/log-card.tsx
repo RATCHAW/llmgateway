@@ -37,6 +37,7 @@ import type { ProjectLogEntry } from "@/lib/types";
 
 interface RoutingMetadata {
 	selectionReason?: string;
+	selectedProvider?: string;
 	availableProviders?: string[];
 	providerScores?: Array<{
 		providerId: string;
@@ -141,6 +142,25 @@ export function LogCard({ log }: { log: ProjectLogEntry }) {
 		log.dataStorageCost !== undefined &&
 		Number(log.dataStorageCost) > 0;
 	const [isExpanded, setIsExpanded] = useState(false);
+	const selectedRoutingProvider =
+		routingMetadata?.selectedProvider ?? log.usedProvider;
+	const sortedProviderScores = routingMetadata?.providerScores
+		? [...routingMetadata.providerScores].sort((a, b) => {
+				const aSelected = a.providerId === selectedRoutingProvider;
+				const bSelected = b.providerId === selectedRoutingProvider;
+				if (aSelected !== bSelected) {
+					return aSelected ? -1 : 1;
+				}
+
+				const aScore = a.score >= 0 ? a.score : Number.POSITIVE_INFINITY;
+				const bScore = b.score >= 0 ? b.score : Number.POSITIVE_INFINITY;
+				if (aScore !== bScore) {
+					return aScore - bScore;
+				}
+
+				return a.providerId.localeCompare(b.providerId);
+			})
+		: [];
 
 	const formattedTime = formatDistanceToNow(new Date(log.createdAt), {
 		addSuffix: true,
@@ -356,6 +376,14 @@ export function LogCard({ log }: { log: ProjectLogEntry }) {
 												</span>
 											</div>
 										)}
+										{selectedRoutingProvider && (
+											<div className="flex justify-between">
+												<span className="text-muted-foreground">Selected</span>
+												<span className="font-mono">
+													{selectedRoutingProvider}
+												</span>
+											</div>
+										)}
 										{routingMetadata.availableProviders &&
 											routingMetadata.availableProviders.length > 0 && (
 												<div className="flex justify-between">
@@ -367,20 +395,30 @@ export function LogCard({ log }: { log: ProjectLogEntry }) {
 													</span>
 												</div>
 											)}
-										{routingMetadata.providerScores &&
-											routingMetadata.providerScores.length > 0 && (
+										{sortedProviderScores.length > 0 && (
 												<div className="pt-1 border-t border-dashed">
-													<div className="text-muted-foreground mb-1">
-														Scores
+													<div className="flex justify-between gap-2 mb-1">
+														<div className="text-muted-foreground">Scores</div>
+														<div className="text-[11px] text-muted-foreground">
+															lower is better
+														</div>
 													</div>
 													<div className="space-y-1">
-														{routingMetadata.providerScores.map((score) => (
+														{sortedProviderScores.map((score) => (
 															<div
 																key={`${score.providerId}-${score.region ?? "default"}`}
 																className="flex justify-between items-center"
 															>
 																<span className="font-mono flex items-center gap-1.5">
 																	{score.providerId}
+																	{score.providerId === selectedRoutingProvider && (
+																		<Badge
+																			variant="outline"
+																			className="h-4 px-1 text-[10px]"
+																		>
+																			selected
+																		</Badge>
+																	)}
 																	{score.region && (
 																		<span className="text-muted-foreground">
 																			({score.region})

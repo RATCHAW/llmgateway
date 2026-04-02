@@ -40,6 +40,18 @@ now_ms() {
 	perl -MTime::HiRes -e 'printf("%.0f\n", Time::HiRes::time() * 1000)'
 }
 
+format_percent_diff() {
+	local value=$1
+	local best=$2
+
+	if [[ "$value" -eq 0 || "$best" -eq 0 ]]; then
+		printf '0.0%%'
+		return
+	fi
+
+	awk -v value="$value" -v best="$best" 'BEGIN { printf "%.1f%%", ((value - best) / best) * 100 }'
+}
+
 first_csv_value() {
 	printf '%s' "$1" | awk -F',' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print $1}'
 }
@@ -361,23 +373,52 @@ for label in "${seen_labels[@]}"; do
 	echo ""
 done
 
-# --- Comparison table ---
-echo -e "${BOLD}Comparison (avg TTFT / avg Total)${NC}"
-printf "%-30s %10s %10s\n" "Endpoint" "TTFT" "Total"
-echo "----------------------------------------------------"
-for label in "${seen_labels[@]}"; do
-	success_count=$(printf '%s' "$results" | jq -r --arg label "$label" '[.[] | select(.endpoint == $label and .status == "success")] | length')
-	if [[ "$success_count" -gt 0 ]]; then
-		avg_ttft=$(printf '%s' "$results" | jq -r --arg label "$label" '[.[] | select(.endpoint == $label and .status == "success" and .ttft_ms != null) | .ttft_ms] | if length > 0 then ((add / length) | floor | tostring) + "ms" else "N/A" end')
-		avg_total=$(printf '%s' "$results" | jq -r --arg label "$label" '[.[] | select(.endpoint == $label and .status == "success") | .total_ms] | if length > 0 then ((add / length) | floor | tostring) + "ms" else "N/A" end')
-	else
-		avg_ttft="N/A"
-		avg_total="N/A"
+print_ranked_table() {
+	local title=$1
+	local metric_key=$2
+	local value_label=$3
+	local best_value
+
+	best_value=$(printf '%s' "$stats" | jq -r --arg metric "$metric_key" '
+		[to_entries[] | select(.value.successful_requests > 0) | .value[$metric]]
+		| if length > 0 then min else empty end
+	')
+
+	echo -e "${BOLD}${title}${NC}"
+	printf "%-30s %10s %12s\n" "Endpoint" "$value_label" "% diff"
+	echo "----------------------------------------------------------"
+
+	if [[ -z "$best_value" ]]; then
+		echo "No successful endpoints"
+		echo ""
+		return
 	fi
-	printf "%-30s %10s %10s\n" "$label" "$avg_ttft" "$avg_total"
-done
-echo "----------------------------------------------------"
-echo ""
+
+	while IFS=$'\t' read -r label metric success_count; do
+		if [[ "$success_count" -gt 0 ]]; then
+			diff=$(format_percent_diff "$metric" "$best_value")
+			printf "%-30s %10sms %12s\n" "$label" "$metric" "$diff"
+		else
+			printf "%-30s %10s %12s\n" "$label" "N/A" "N/A"
+		fi
+	done < <(
+		printf '%s' "$stats" | jq -r --arg metric "$metric_key" '
+			to_entries
+			| sort_by(
+				if .value.successful_requests > 0 then .value[$metric] else 999999999 end
+			)
+			| .[]
+			| [.key, (.value[$metric] | tostring), (.value.successful_requests | tostring)]
+			| @tsv
+		'
+	)
+
+	echo "----------------------------------------------------------"
+	echo ""
+}
+
+print_ranked_table "Comparison By Avg TTFT" "avg_ttft_ms" "TTFT"
+print_ranked_table "Comparison By Avg Total" "avg_total_ms" "Total"
 
 # --- JSON output ---
 endpoint_labels=$(printf '%s\n' "${seen_labels[@]}" | jq -R . | jq -s .)

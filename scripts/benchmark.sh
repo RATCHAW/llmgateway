@@ -16,6 +16,7 @@ set -o pipefail
 #   REQUESTS_PER_ENDPOINT       - Number of requests per endpoint (default: 10)
 #   PARALLEL_REQUESTS           - Parallel requests per endpoint (default: 4)
 #   MODEL_NAME                  - Model to benchmark (default: gemini-3-flash-preview)
+#   BENCHMARK_REASONING_EFFORT  - Reasoning level to send to all endpoints (default: low, use "off" to disable)
 #   BENCHMARK_PROMPT            - Prompt to send for each request
 #   OUTPUT_FILE                 - Where to write the benchmark JSON
 #   LLM_GATEWAY_BASE_URL        - Override LLM Gateway base URL (default: http://localhost:4001)
@@ -25,6 +26,7 @@ set -o pipefail
 REQUESTS=${REQUESTS_PER_ENDPOINT:-10}
 PARALLEL_REQUESTS=${PARALLEL_REQUESTS:-4}
 MODEL_NAME="${MODEL_NAME:-gemini-3-flash-preview}"
+BENCHMARK_REASONING_EFFORT="${BENCHMARK_REASONING_EFFORT:-low}"
 PROMPT="${BENCHMARK_PROMPT:-Write a haiku about programming}"
 OUTPUT_FILE="${OUTPUT_FILE:-benchmark_gemini3_flash.json}"
 GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL:-http://localhost:4001}"
@@ -60,15 +62,46 @@ first_csv_value() {
 	printf '%s' "$1" | awk -F',' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print $1}'
 }
 
+get_google_thinking_budget() {
+	case "$1" in
+		minimal)
+			printf '512'
+			;;
+		low)
+			printf '2048'
+			;;
+		medium)
+			printf '8192'
+			;;
+		high)
+			printf '24576'
+			;;
+		xhigh)
+			printf '65536'
+			;;
+		off | none | "")
+			printf ''
+			;;
+		*)
+			echo "Unsupported BENCHMARK_REASONING_EFFORT: $1" >&2
+			return 1
+			;;
+	esac
+}
+
 build_payload() {
 	local request_mode=$1
 	local model=$2
+	local google_thinking_budget=""
+
+	google_thinking_budget=$(get_google_thinking_budget "$BENCHMARK_REASONING_EFFORT") || return 1
 
 	case "$request_mode" in
 		openai-chat)
 			jq -cn \
 				--arg model "$model" \
 				--arg prompt "$PROMPT" \
+				--arg reasoning_effort "$BENCHMARK_REASONING_EFFORT" \
 				'{
 					model: $model,
 					messages: [
@@ -76,11 +109,18 @@ build_payload() {
 					],
 					stream: true,
 					max_tokens: 100
-				}'
+				}
+				+ (
+					if ($reasoning_effort == "off" or $reasoning_effort == "none" or $reasoning_effort == "")
+					then {}
+					else {reasoning_effort: $reasoning_effort}
+					end
+				)'
 			;;
 		google-native)
 			jq -cn \
 				--arg prompt "$PROMPT" \
+				--argjson thinking_budget "${google_thinking_budget:-null}" \
 				'{
 					contents: [
 						{
@@ -91,7 +131,21 @@ build_payload() {
 					generationConfig: {
 						maxOutputTokens: 100
 					}
-				}'
+				}
+				+ (
+					if $thinking_budget == null
+					then {}
+					else {
+						generationConfig: {
+							maxOutputTokens: 100,
+							thinkingConfig: {
+								includeThoughts: true,
+								thinkingBudget: $thinking_budget
+							}
+						}
+					}
+					end
+				)'
 			;;
 		*)
 			echo "Unknown request mode: $request_mode" >&2
@@ -168,6 +222,7 @@ echo "Endpoints: ${#ENDPOINTS[@]}"
 echo "Requests per endpoint: $REQUESTS"
 echo "Parallel requests per endpoint: $PARALLEL_REQUESTS"
 echo "Prompt: $PROMPT"
+echo "Reasoning effort: $BENCHMARK_REASONING_EFFORT"
 echo "Gateway base URL: $GATEWAY_BASE_URL"
 echo ""
 

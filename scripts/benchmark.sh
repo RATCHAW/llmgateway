@@ -2,7 +2,7 @@
 
 set -o pipefail
 
-# Gemini 3 Flash Benchmark: direct providers vs LLM Gateway vs OpenRouter
+# Gemini 3 Flash Benchmark: direct providers vs local LLM Gateway
 #
 # Preferred env vars (set whichever endpoints you want to test):
 #   LLM_GOOGLE_VERTEX_API_KEY   - Google Vertex API key
@@ -10,22 +10,26 @@ set -o pipefail
 #   LLM_GOOGLE_VERTEX_REGION    - Vertex AI region (default: global)
 #   LLM_GOOGLE_AI_STUDIO_API_KEY - Google AI Studio API key
 #   LLM_OPENROUTER_API_KEY      - OpenRouter API key
-#   LLM_GATEWAY_API_KEY         - LLM Gateway API key
+#   LLM_GATEWAY_API_KEY         - LLM Gateway API key (defaults to test-token)
 #
 # Optional env vars:
-#   REQUESTS_PER_ENDPOINT       - Number of requests per endpoint (default: 5)
+#   REQUESTS_PER_ENDPOINT       - Number of requests per endpoint (default: 10)
+#   PARALLEL_REQUESTS           - Parallel requests per endpoint (default: 4)
 #   MODEL_NAME                  - Model to benchmark (default: gemini-3-flash-preview)
 #   BENCHMARK_PROMPT            - Prompt to send for each request
 #   OUTPUT_FILE                 - Where to write the benchmark JSON
-#   LLM_GATEWAY_BASE_URL        - Override LLM Gateway base URL
+#   LLM_GATEWAY_BASE_URL        - Override LLM Gateway base URL (default: http://localhost:4001)
+#   LLM_GATEWAY_LOCAL_API_KEY   - Override the local gateway token (default: test-token)
 #   LLM_OPENROUTER_BASE_URL     - Override OpenRouter base URL
 
-REQUESTS=${REQUESTS_PER_ENDPOINT:-5}
+REQUESTS=${REQUESTS_PER_ENDPOINT:-10}
+PARALLEL_REQUESTS=${PARALLEL_REQUESTS:-4}
 MODEL_NAME="${MODEL_NAME:-gemini-3-flash-preview}"
 PROMPT="${BENCHMARK_PROMPT:-Write a haiku about programming}"
 OUTPUT_FILE="${OUTPUT_FILE:-benchmark_gemini3_flash.json}"
-GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL:-https://api.llmgateway.io}"
+GATEWAY_BASE_URL="${LLM_GATEWAY_BASE_URL:-http://localhost:4001}"
 OPENROUTER_BASE_URL="${LLM_OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}"
+RESULTS_DIR=$(mktemp -d)
 
 # Colors
 RED='\033[0;31m'
@@ -111,7 +115,12 @@ VERTEX_PROJECT=$(first_csv_value "${LLM_GOOGLE_CLOUD_PROJECT:-}")
 VERTEX_REGION=$(first_csv_value "${LLM_GOOGLE_VERTEX_REGION:-global}")
 GOOGLE_AI_STUDIO_API_KEY=$(first_csv_value "${LLM_GOOGLE_AI_STUDIO_API_KEY:-}")
 OPENROUTER_API_KEY=$(first_csv_value "${LLM_OPENROUTER_API_KEY:-}")
-GATEWAY_API_KEY=$(first_csv_value "${LLM_GATEWAY_API_KEY:-}")
+
+if [[ "$GATEWAY_BASE_URL" == http://localhost:* || "$GATEWAY_BASE_URL" == http://127.0.0.1:* ]]; then
+	GATEWAY_API_KEY=$(first_csv_value "${LLM_GATEWAY_LOCAL_API_KEY:-test-token}")
+else
+	GATEWAY_API_KEY=$(first_csv_value "${LLM_GATEWAY_API_KEY:-}")
+fi
 
 # --- Endpoint definitions ---
 # Each endpoint: label|request_mode|url|auth_type|auth_value|model_field|extra_header
@@ -157,7 +166,9 @@ echo ""
 echo -e "${BOLD}Gemini 3 Flash Benchmark${NC}"
 echo "Endpoints: ${#ENDPOINTS[@]}"
 echo "Requests per endpoint: $REQUESTS"
+echo "Parallel requests per endpoint: $PARALLEL_REQUESTS"
 echo "Prompt: $PROMPT"
+echo "Gateway base URL: $GATEWAY_BASE_URL"
 echo ""
 
 # Initialize results
@@ -284,30 +295,75 @@ benchmark_request() {
 		}'
 }
 
-# Run benchmarks
-for endpoint_def in "${ENDPOINTS[@]}"; do
-	IFS='|' read -r label request_mode url auth_type auth_value model extra_header <<< "$endpoint_def"
+wait_for_parallel_slot() {
+	local max_parallel=$1
+
+	while true; do
+		local running_jobs
+		running_jobs=$(jobs -pr | wc -l | tr -d ' ')
+		if [[ "$running_jobs" -lt "$max_parallel" ]]; then
+			return
+		fi
+		sleep 0.1
+	done
+}
+
+run_endpoint_benchmark() {
+	local label=$1
+	local request_mode=$2
+	local url=$3
+	local auth_type=$4
+	local auth_value=$5
+	local model=$6
+	local extra_header=$7
+	local endpoint_dir="${RESULTS_DIR}/${label}"
+
+	mkdir -p "$endpoint_dir"
 
 	echo -e "${CYAN}[$label]${NC} ${YELLOW}$model${NC}"
 
-	for i in $(seq 1 $REQUESTS); do
-		echo -n "  Request $i/$REQUESTS... "
+	for i in $(seq 1 "$REQUESTS"); do
+		wait_for_parallel_slot "$PARALLEL_REQUESTS"
+		(
+			local result
+			local ttft
+			local total
+			local status
+			local error_msg
 
-		result=$(benchmark_request "$url" "$auth_type" "$auth_value" "$model" "$label" "$i" "$request_mode" "$extra_header")
-		results=$(printf '%s' "$results" | jq -c --argjson item "$result" '. + [$item]')
+			result=$(benchmark_request "$url" "$auth_type" "$auth_value" "$model" "$label" "$i" "$request_mode" "$extra_header")
+			printf '%s\n' "$result" > "${endpoint_dir}/${i}.json"
 
-		ttft=$(printf '%s' "$result" | jq -r '.ttft_ms // "null"')
-		total=$(printf '%s' "$result" | jq -r '.total_ms')
-		status=$(printf '%s' "$result" | jq -r '.status')
+			ttft=$(printf '%s' "$result" | jq -r '.ttft_ms // "null"')
+			total=$(printf '%s' "$result" | jq -r '.total_ms')
+			status=$(printf '%s' "$result" | jq -r '.status')
 
-		if [[ "$status" == "success" ]]; then
-			echo -e "${GREEN}OK${NC} TTFT: ${ttft}ms, Total: ${total}ms"
-		else
-			error_msg=$(printf '%s' "$result" | jq -r '.error' | cut -c 1-120)
-			echo -e "${RED}FAIL${NC} ${error_msg}"
+			if [[ "$status" == "success" ]]; then
+				echo -e "  Request $i/$REQUESTS... ${GREEN}OK${NC} TTFT: ${ttft}ms, Total: ${total}ms"
+			else
+				error_msg=$(printf '%s' "$result" | jq -r '.error' | cut -c 1-120)
+				echo -e "  Request $i/$REQUESTS... ${RED}FAIL${NC} ${error_msg}"
+			fi
+		) &
+	done
+
+	wait
+
+	local endpoint_results="[]"
+	for result_file in "$endpoint_dir"/*.json; do
+		if [[ -f "$result_file" ]]; then
+			endpoint_results=$(printf '%s' "$endpoint_results" | jq -c --argjson item "$(cat "$result_file")" '. + [$item]')
 		fi
 	done
+
+	results=$(printf '%s' "$results" | jq -c --argjson endpoint_results "$endpoint_results" '. + $endpoint_results')
 	echo ""
+}
+
+# Run benchmarks
+for endpoint_def in "${ENDPOINTS[@]}"; do
+	IFS='|' read -r label request_mode url auth_type auth_value model extra_header <<< "$endpoint_def"
+	run_endpoint_benchmark "$label" "$request_mode" "$url" "$auth_type" "$auth_value" "$model" "$extra_header"
 done
 
 # --- Statistics ---
@@ -441,3 +497,5 @@ echo "$output" | jq '.' > "$OUTPUT_FILE"
 
 echo -e "${GREEN}Benchmark complete!${NC}"
 echo "Results saved to: $OUTPUT_FILE"
+
+rm -rf "$RESULTS_DIR"

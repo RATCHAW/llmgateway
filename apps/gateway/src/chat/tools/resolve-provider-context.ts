@@ -10,7 +10,6 @@ import {
 	getProviderHeaders,
 	prepareRequestBody,
 } from "@llmgateway/actions";
-import { logger } from "@llmgateway/logger";
 import {
 	type BaseMessage,
 	getRegionSpecificEnvValue,
@@ -47,6 +46,7 @@ export interface ProviderContext {
 	requestCanBeCanceled: boolean;
 	isImageGeneration: boolean;
 	supportsReasoning: boolean;
+	splitTaggedReasoning: boolean;
 	temperature: number | undefined;
 	max_tokens: number | undefined;
 	top_p: number | undefined;
@@ -253,6 +253,8 @@ export async function resolveProviderContext(
 
 	// --- Check if model supports reasoning (from selected provider, not any) ---
 	const supportsReasoning = providerMappingForSelected?.reasoning === true;
+	const splitTaggedReasoning =
+		providerMappingForSelected?.splitTaggedReasoning === true;
 
 	// --- Image generation check ---
 	const isImageGeneration =
@@ -276,16 +278,6 @@ export async function resolveProviderContext(
 		isImageGeneration,
 		usedRegion,
 	);
-
-	logger.info("[region-debug] Provider context resolved", {
-		provider: usedProvider,
-		model: usedModel,
-		region: usedRegion ?? "none",
-		endpoint: url ?? "unresolved",
-		tokenSource: providerKey ? "db-provider-key" : "env-var",
-		tokenEnvVar: envVarName,
-		projectMode: project.mode,
-	});
 
 	if (!url) {
 		throw new HTTPException(400, {
@@ -342,8 +334,9 @@ export async function resolveProviderContext(
 		const effectiveMaxOutput = providerMappingForSelected.maxOutput;
 		if (effectiveMaxOutput !== undefined) {
 			if (max_tokens > effectiveMaxOutput) {
-				// Silently cap to max output instead of throwing on retry
-				max_tokens = effectiveMaxOutput;
+				throw new HTTPException(400, {
+					message: `The requested max_tokens (${max_tokens}) exceeds the maximum output tokens allowed for model ${usedModel} (${effectiveMaxOutput})`,
+				});
 			}
 		}
 	}
@@ -391,7 +384,9 @@ export async function resolveProviderContext(
 			providerMappingForSelected.maxOutput !== undefined
 		) {
 			if (requestBody.max_tokens > providerMappingForSelected.maxOutput) {
-				requestBody.max_tokens = providerMappingForSelected.maxOutput;
+				throw new HTTPException(400, {
+					message: `The effective max_tokens (${requestBody.max_tokens}) exceeds the maximum output tokens allowed for model ${usedModel} (${providerMappingForSelected.maxOutput})`,
+				});
 			}
 		}
 	}
@@ -435,6 +430,7 @@ export async function resolveProviderContext(
 		requestCanBeCanceled,
 		isImageGeneration,
 		supportsReasoning,
+		splitTaggedReasoning,
 		temperature,
 		max_tokens,
 		top_p,

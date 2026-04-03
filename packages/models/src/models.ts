@@ -6,6 +6,7 @@ import { googleModels } from "./models/google.js";
 import { llmgatewayModels } from "./models/llmgateway.js";
 import { metaModels } from "./models/meta.js";
 import { microsoftModels } from "./models/microsoft.js";
+import { mimoModels } from "./models/mimo.js";
 import { minimaxModels } from "./models/minimax.js";
 import { mistralModels } from "./models/mistral.js";
 import { moonshotModels } from "./models/moonshot.js";
@@ -102,6 +103,16 @@ export interface ProviderRegion {
 	 * When absent, falls back to the mapping-level maxOutput.
 	 */
 	maxOutput?: number;
+	/**
+	 * Streaming support override for this region.
+	 * When absent, falls back to the mapping-level streaming.
+	 */
+	streaming?: boolean | "only";
+	/**
+	 * Test skip/only for this specific region.
+	 * When absent, falls back to the mapping-level test.
+	 */
+	test?: "skip" | "only";
 }
 
 export interface ProviderModelMapping {
@@ -176,9 +187,14 @@ export interface ProviderModelMapping {
 	 */
 	maxOutput?: number;
 	/**
-	 * Whether this specific model supports streaming for this provider
+	 * Whether this specific model supports streaming for this provider.
+	 * - true: supports both streaming and non-streaming
+	 * - false: does not support streaming
+	 * - "only": only supports streaming (non-streaming requests are auto-converted).
+	 *   Some providers enforce stream-only for certain models (e.g. Alibaba QwQ series).
+	 *   Ref: https://www.alibabacloud.com/help/en/model-studio/stream
 	 */
-	streaming: boolean;
+	streaming: boolean | "only";
 	/**
 	 * Whether this specific model supports vision (image inputs) for this provider
 	 */
@@ -187,6 +203,11 @@ export interface ProviderModelMapping {
 	 * Whether this model supports reasoning mode
 	 */
 	reasoning?: boolean;
+	/**
+	 * Whether the provider returns reasoning inside tagged content (e.g. &lt;think&gt;...&lt;/think&gt;)
+	 * that needs to be split into separate reasoning and content fields
+	 */
+	splitTaggedReasoning?: boolean;
 	/**
 	 * Whether this model supports the OpenAI responses API (defaults to true if reasoning is true)
 	 */
@@ -371,6 +392,7 @@ export const models = [
 	...deepseekModels,
 	...mistralModels,
 	...microsoftModels,
+	...mimoModels,
 	...minimaxModels,
 	...moonshotModels,
 	...alibabaModels,

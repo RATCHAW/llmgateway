@@ -326,7 +326,12 @@ const ModelTableRow = React.memo(
 								{row.model.id}
 							</Link>
 							<button
-								onClick={(e) => onCopy(row.model.id, row.rowKey, e)}
+								onClick={(e) => {
+									const fullId = row.provider.region
+										? `${row.provider.providerId}/${row.model.id}:${row.provider.region}`
+										: `${row.provider.providerId}/${row.model.id}`;
+									onCopy(fullId, row.rowKey, e);
+								}}
 								className="p-1 hover:bg-muted rounded transition-colors"
 								title={copiedModel === row.rowKey ? "Copied!" : "Copy model ID"}
 							>
@@ -362,6 +367,20 @@ const ModelTableRow = React.memo(
 									<p className="text-xs">Video per-second pricing</p>
 								</TooltipContent>
 							</Tooltip>
+						) : (!row.provider.inputPrice ||
+								parseFloat(row.provider.inputPrice) === 0) &&
+						  row.provider.requestPrice &&
+						  parseFloat(row.provider.requestPrice) > 0 ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="text-amber-500 cursor-help">
+										${parseFloat(row.provider.requestPrice).toFixed(3)}/req
+									</span>
+								</TooltipTrigger>
+								<TooltipContent>
+									<p className="text-xs">Per-request pricing (not per token)</p>
+								</TooltipContent>
+							</Tooltip>
 						) : (
 							formatPrice(row.provider.inputPrice, row.provider.discount)
 						)}
@@ -390,6 +409,11 @@ const ModelTableRow = React.memo(
 									<p className="text-xs">Video per-second pricing</p>
 								</TooltipContent>
 							</Tooltip>
+						) : (!row.provider.outputPrice ||
+								parseFloat(row.provider.outputPrice) === 0) &&
+						  row.provider.requestPrice &&
+						  parseFloat(row.provider.requestPrice) > 0 ? (
+							<span className="text-muted-foreground">—</span>
 						) : (
 							formatPrice(row.provider.outputPrice, row.provider.discount)
 						)}
@@ -1044,9 +1068,17 @@ export function AllModels({
 	// Pre-compute capabilities and provider icons for performance
 	const flattenedRows: FlattenedModelRow[] = useMemo(() => {
 		const rows: FlattenedModelRow[] = [];
+		const providerFilter =
+			filters.selectedProvider && filters.selectedProvider !== "all"
+				? filters.selectedProvider
+				: null;
 
 		for (const model of modelsWithProviders) {
 			for (const { provider, providerInfo } of model.providerDetails) {
+				if (providerFilter && provider.providerId !== providerFilter) {
+					continue;
+				}
+
 				const hasAdditionalPricing =
 					provider.webSearch ??
 					(provider.requestPrice !== null &&
@@ -1060,7 +1092,7 @@ export function AllModels({
 					provider,
 					providerInfo,
 					hasAdditionalPricing,
-					rowKey: `${provider.providerId}-${model.id}`,
+					rowKey: `${provider.providerId}-${model.id}-${provider.region ?? ""}`,
 					capabilities: computeCapabilities(provider, model),
 					ProviderIcon: getProviderIcon(provider.providerId),
 				});
@@ -1147,7 +1179,7 @@ export function AllModels({
 			}
 			return 0;
 		});
-	}, [modelsWithProviders, sortField, sortDirection]);
+	}, [modelsWithProviders, sortField, sortDirection, filters.selectedProvider]);
 
 	// Toggle expanded row
 	const toggleRowExpanded = useCallback((rowKey: string) => {

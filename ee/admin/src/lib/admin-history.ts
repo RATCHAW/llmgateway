@@ -53,7 +53,9 @@ export async function getModelDetail(modelId: string, window?: HistoryWindow) {
 	const { data } = await $api.GET("/admin/models/{modelId}", {
 		params: {
 			path: { modelId: encodeURIComponent(modelId) },
-			query: window ? { window } : undefined,
+			query: {
+				...(window ? { window } : {}),
+			} as any,
 		},
 	});
 	return data ?? null;

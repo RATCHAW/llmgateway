@@ -116,6 +116,8 @@ export const zaiModels = [
 				vision: false,
 				tools: true,
 				reasoning: true,
+				// Embercloud does not expose reasoning content in responses
+				reasoningOutput: "omit",
 				jsonOutput: false,
 				supportedParameters: [
 					"messages",
@@ -175,6 +177,7 @@ export const zaiModels = [
 				vision: false,
 				tools: true,
 				jsonOutput: true,
+				// Embercloud bug: tool_choice other than "auto" breaks streaming tool calls for this model
 				supportedParameters: [
 					"messages",
 					"model",
@@ -190,7 +193,6 @@ export const zaiModels = [
 					"logprobs",
 					"top_logprobs",
 					"tools",
-					"tool_choice",
 					"parallel_tool_calls",
 				],
 			},
@@ -259,6 +261,7 @@ export const zaiModels = [
 				reasoning: false,
 				vision: false,
 				tools: true,
+				stability: "unstable",
 				jsonOutput: true,
 			},
 			{
@@ -342,6 +345,7 @@ export const zaiModels = [
 				reasoning: false,
 				vision: false,
 				tools: true,
+				stability: "unstable",
 				jsonOutput: true,
 			},
 		],
@@ -401,6 +405,7 @@ export const zaiModels = [
 			{
 				// Canopywave has been intermittently unavailable for this model in E2E.
 				stability: "unstable",
+				deactivatedAt: new Date("2026-03-31"),
 				providerId: "canopywave",
 				modelName: "zai/glm-4.7",
 				inputPrice: 0.43 / 1e6,
@@ -527,6 +532,8 @@ export const zaiModels = [
 				vision: false,
 				tools: true,
 				reasoning: true,
+				// Embercloud does not expose reasoning content in responses
+				reasoningOutput: "omit",
 				jsonOutput: true,
 				supportedParameters: [
 					"messages",
@@ -560,6 +567,8 @@ export const zaiModels = [
 			{
 				providerId: "zai",
 				modelName: "glm-4.7-flashx",
+				// Frequently times out on multi-turn tool call requests
+				stability: "unstable",
 				inputPrice: 0.07 / 1e6,
 				cachedInputPrice: 0.01 / 1e6,
 				outputPrice: 0.4 / 1e6,

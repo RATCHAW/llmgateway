@@ -11,6 +11,7 @@ import {
 	desc,
 	eq,
 	errorDetails,
+	gatewayContentFilterResponseSchema,
 	gt,
 	gte,
 	type InferSelectModel,
@@ -126,9 +127,15 @@ const logSchema = z.object({
 						failed: z.boolean().optional(),
 						status_code: z.number().optional(),
 						error_type: z.string().optional(),
+						rate_limited: z.boolean().optional(),
+						contentFilterProvider: z.boolean().optional(),
+						excludedByContentFilter: z.boolean().optional(),
 					}),
 				)
 				.optional(),
+			contentFilterMatched: z.boolean().optional(),
+			contentFilterRerouted: z.boolean().optional(),
+			contentFilterExcludedProviders: z.array(z.string()).optional(),
 			routing: z
 				.array(
 					z.object({
@@ -146,6 +153,9 @@ const logSchema = z.object({
 		.optional(),
 	retried: z.boolean().nullable().optional(),
 	retriedByLogId: z.string().nullable().optional(),
+	gatewayContentFilterResponse: gatewayContentFilterResponseSchema
+		.nullable()
+		.optional(),
 });
 
 // GET /logs/:id - Fetch a single log by ID

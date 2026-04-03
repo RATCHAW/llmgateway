@@ -5,7 +5,6 @@ import * as React from "react";
 
 // import { Badge } from "@/lib/components/badge";
 import { Button } from "@/lib/components/button";
-import { Checkbox } from "@/lib/components/checkbox";
 import {
 	Command,
 	CommandEmpty,
@@ -22,6 +21,7 @@ import {
 	PopoverTrigger,
 } from "@/lib/components/popover";
 import { Separator } from "@/lib/components/separator";
+import { Switch } from "@/lib/components/switch";
 import { getProviderForModel } from "@/lib/model-utils";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +40,7 @@ interface ModelSelectorProps {
 	onValueChange?: (value: string) => void;
 	placeholder?: string;
 	rootOnly?: boolean;
+	id?: string;
 }
 
 interface FilterState {
@@ -76,6 +77,7 @@ export function ModelSelector({
 	onValueChange,
 	placeholder = "Select model...",
 	rootOnly,
+	id,
 }: ModelSelectorProps) {
 	const [open, setOpen] = React.useState(false);
 	const [filterOpen, setFilterOpen] = React.useState(false);
@@ -261,6 +263,7 @@ export function ModelSelector({
 		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>
 				<Button
+					id={id}
 					variant="outline"
 					role="combobox"
 					aria-expanded={open}
@@ -340,7 +343,7 @@ export function ModelSelector({
 				<div className="flex">
 					{/* Main content */}
 					<div className="flex-1">
-						<Command>
+						<Command shouldFilter={false}>
 							<div className="flex items-center border-b px-3 w-full">
 								<CommandInput
 									placeholder="Search models..."
@@ -392,7 +395,7 @@ export function ModelSelector({
 																key={`${provider.id}-${index}`}
 																className="flex items-center space-x-2"
 															>
-																<Checkbox
+																<Switch
 																	id={`provider-${provider.id}`}
 																	checked={filters.providers.includes(
 																		provider.id,
@@ -432,7 +435,7 @@ export function ModelSelector({
 															key={capability}
 															className="flex items-center space-x-2"
 														>
-															<Checkbox
+															<Switch
 																id={`capability-${capability}`}
 																checked={filters.capabilities.includes(
 																	capability,
@@ -474,7 +477,7 @@ export function ModelSelector({
 															key={option.value}
 															className="flex items-center space-x-2"
 														>
-															<Checkbox
+															<Switch
 																id={`price-${option.value}`}
 																checked={filters.priceRange === option.value}
 																onCheckedChange={() =>

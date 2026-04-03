@@ -1,7 +1,6 @@
 import {
 	AlertTriangle,
 	ArrowLeft,
-	Play,
 	Zap,
 	Eye,
 	Wrench,
@@ -15,23 +14,24 @@ import { notFound } from "next/navigation";
 
 import Footer from "@/components/landing/footer";
 import { Navbar } from "@/components/landing/navbar";
+import { adaptModel } from "@/components/models/adapt-model";
 import { CopyModelName } from "@/components/models/copy-model-name";
+import { DetailProviderCards } from "@/components/models/detail-provider-cards";
 import {
 	GlobalDiscountBanner,
 	type DiscountData,
 } from "@/components/models/global-discount-banner";
 import { ModelBenchmarks } from "@/components/models/model-benchmarks";
-import { ModelProviderCard } from "@/components/models/model-provider-card";
+import { ModelCtaButton } from "@/components/models/model-cta-button";
 import { ModelStatusBadgeAuto } from "@/components/models/model-status-badge-auto";
 import { ProviderTabs } from "@/components/models/provider-tabs";
 import { Badge } from "@/lib/components/badge";
-import { Button } from "@/lib/components/button";
-import { getConfig } from "@/lib/config-server";
 import { fetchServerData } from "@/lib/server-api";
 
 import {
 	models as modelDefinitions,
 	providers as providerDefinitions,
+	expandAllProviderRegions,
 	type StabilityLevel,
 	type ModelDefinition,
 } from "@llmgateway/models";
@@ -114,7 +114,6 @@ function getEffectiveProviderDiscount(
 }
 
 export default async function ModelPage({ params }: PageProps) {
-	const config = getConfig();
 	const { name } = await params;
 	const decodedName = decodeURIComponent(name);
 
@@ -156,7 +155,8 @@ export default async function ModelPage({ params }: PageProps) {
 	};
 
 	const allDiscounts = await getModelDiscounts(decodedName);
-	const modelProviders = modelDef.providers.map((provider) => {
+	const expandedProviders = expandAllProviderRegions(modelDef.providers);
+	const modelProviders = expandedProviders.map((provider) => {
 		const providerInfo = providerDefinitions.find(
 			(p) => p.id === provider.providerId,
 		);
@@ -173,6 +173,8 @@ export default async function ModelPage({ params }: PageProps) {
 		};
 	});
 	const currentModelDiscount = getBestDiscount(allDiscounts, decodedName);
+
+	const adaptedModel = adaptModel(modelDef, modelProviders);
 
 	const breadcrumbSchema = {
 		"@context": "https://schema.org",
@@ -301,16 +303,12 @@ export default async function ModelPage({ params }: PageProps) {
 								}))}
 							/>
 
-							<a
-								href={`${config.playgroundUrl}?model=${encodeURIComponent(modelDef.id)}`}
-								target="_blank"
-								rel="noopener noreferrer"
-							>
-								<Button variant="outline" size="sm" className="gap-2">
-									<Play className="h-3 w-3" />
-									Try in Playground
-								</Button>
-							</a>
+							<ModelCtaButton
+								modelId={`${modelProviders[0]?.providerId}/${decodedName}`}
+								size="sm"
+								className="gap-2"
+								iconClassName="h-3 w-3"
+							/>
 						</div>
 
 						<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-sm text-muted-foreground mb-4">
@@ -447,11 +445,11 @@ export default async function ModelPage({ params }: PageProps) {
 								const hasTools = modelProviders.some((p) => p.tools);
 								const hasReasoning = modelProviders.some((p) => p.reasoning);
 								const hasJsonOutput = modelProviders.some((p) => p.jsonOutput);
-								const hasImageGen = Array.isArray((modelDef as any)?.output)
-									? ((modelDef as any).output as string[]).includes("image")
+								const hasImageGen = Array.isArray(modelDef.output)
+									? modelDef.output.includes("image")
 									: false;
-								const hasVideoGen = Array.isArray((modelDef as any)?.output)
-									? ((modelDef as any).output as string[]).includes("video")
+								const hasVideoGen = Array.isArray(modelDef.output)
+									? modelDef.output.includes("video")
 									: false;
 
 								if (hasStreaming) {
@@ -554,17 +552,7 @@ export default async function ModelPage({ params }: PageProps) {
 							</div>
 						</div>
 
-						<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-							{modelProviders.map((provider) => (
-								<ModelProviderCard
-									key={`${provider.providerId}-${provider.modelName}-${decodedName}`}
-									provider={provider}
-									modelName={decodedName}
-									modelStability={modelDef.stability}
-									modelOutput={modelDef.output}
-								/>
-							))}
-						</div>
+						<DetailProviderCards model={adaptedModel} />
 					</div>
 
 					<div className="mb-8">

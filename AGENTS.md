@@ -145,6 +145,7 @@ When creating a new package in `packages/`, include these config files. Copy the
 ### Code Standards
 
 - Always use the internal api (`apps/api/`) for any backend operations, never use NextJS API routes.
+- In frontend apps (`apps/ui`, `apps/playground`, `apps/code`, `ee/admin`), always use the generated typed API client (`useFetchClient()` or `useApi()` from `@/lib/fetch-client`) to call the Hono API. Never use raw `fetch()` for API calls. The client is auto-generated from the OpenAPI spec (`pnpm --filter api generate && pnpm --filter <app> generate`). For non-hook contexts (e.g., utility functions), accept the fetch client as a parameter from the calling component.
 - Do not use useEffect for data fetching in the UI; instead, use TanStack Query for all data fetching and state management.
 - Always use top-level `import`, never use require or dynamic imports
 - Use conventional commit message format and limit the commit message title to max 50 characters
@@ -155,13 +156,15 @@ When creating a new package in `packages/`, include these config files. Copy the
 - Always use pnpm for package management
 - Use cookies for user-settings which are not saved in the database to ensure SSR works
 - Apply DRY principles for code reuse
+- Do not add explicit caching or memoization around `process.env` reads or parsed env-var values unless there is a measured hot-path need
 - Exception: in `packages/models`, explicit duplication of model/provider mappings is acceptable and preferred over helper-based expansion. This is the only place in the repo where duplicating model definitions is OK.
 - No unnecessary code comments
 - Do not use broad try/catch in API handlers unless to check for specific errors; instead, let errors propagate and be handled by the global error handler
 
 ### Testing and Quality Assurance
 
-- Run `pnpm test:unit` and `pnpm test:e2e` after adding features
+- Run `pnpm test:unit` after adding features
+- NEVER RUN THE FULL E2E suite, instead run specific tests related to your changes. Use `TEST_MODELS` to limit the models tested for faster feedback.
 - Run `pnpm build` to ensure production builds work
 - Run `pnpm format` after code changes
 

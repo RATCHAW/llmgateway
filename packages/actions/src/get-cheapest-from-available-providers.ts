@@ -57,6 +57,14 @@ const DEFAULT_THROUGHPUT = 50; // Assume 50 tokens/second if no data
 // Epsilon-greedy exploration: 1% chance to randomly explore
 const EXPLORATION_RATE = 0.01;
 
+function isTestProcess(): boolean {
+	if (process.env.NODE_ENV === "test" || Boolean(process.env.VITEST)) {
+		return true;
+	}
+
+	return process.argv.some((arg) => arg.toLowerCase().includes("vitest"));
+}
+
 export interface RoutingMetadata {
 	availableProviders: string[];
 	selectedProvider: string;
@@ -74,12 +82,26 @@ export interface RoutingMetadata {
 		failed?: boolean;
 		status_code?: number;
 		error_type?: string;
+		// Set when this provider was excluded due to RPM cap
+		rate_limited?: boolean;
+		// Set when the provider is marked as content-filtered in the provider catalog
+		contentFilterProvider?: boolean;
+		// Set when the provider was excluded because the gateway content filter matched
+		excludedByContentFilter?: boolean;
 	}>;
 	// Optional fields for low-uptime fallback routing
 	originalProvider?: string;
 	originalProviderUptime?: number;
+	// Set when the originally requested provider was rate-limited and fallback occurred
+	originalProviderRateLimited?: boolean;
 	// Whether fallback was disabled via X-No-Fallback header
 	noFallback?: boolean;
+	// Whether the gateway content filter matched for the request before upstream routing
+	contentFilterMatched?: boolean;
+	// Whether routing excluded content-filter providers in favor of alternatives
+	contentFilterRerouted?: boolean;
+	// Providers excluded because they are marked as content-filter providers
+	contentFilterExcludedProviders?: string[];
 	// All provider attempts from retry fallback mechanism (including successful)
 	routing?: Array<{
 		provider: string;
@@ -231,8 +253,7 @@ export function getCheapestFromAvailableProviders<
 	// Epsilon-greedy exploration: randomly select a provider 1% of the time
 	// This ensures all providers get periodic traffic and build up metrics
 	// Skip during tests to keep behavior deterministic
-	const isTest = process.env.NODE_ENV === "test" || process.env.VITEST;
-	if (!isTest && Math.random() < EXPLORATION_RATE) {
+	if (!isTestProcess() && Math.random() < EXPLORATION_RATE) {
 		const randomProvider =
 			stableProviders[Math.floor(Math.random() * stableProviders.length)];
 		return {

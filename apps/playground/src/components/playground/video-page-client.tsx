@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePostHog } from "posthog-js/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { TopUpCreditsDialog } from "@/components/credits/top-up-credits-dialog";
@@ -12,6 +13,7 @@ import { VideoSidebar } from "@/components/playground/video-sidebar";
 import { Button } from "@/components/ui/button";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { useUser } from "@/hooks/useUser";
+import { useFetchClient } from "@/lib/fetch-client";
 import { mapModels } from "@/lib/mapmodels";
 import {
 	getNormalizedVideoRequestSelection,
@@ -32,6 +34,16 @@ import type {
 	VideoSize,
 } from "@/lib/video-gen";
 
+const VIDEO_GALLERY_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+const VIDEO_GALLERY_KEY = "video-gallery-items";
+
+function filterRecentGalleryItems(
+	items: VideoGalleryItem[],
+): VideoGalleryItem[] {
+	const now = Date.now();
+	return items.filter((item) => now - item.timestamp < VIDEO_GALLERY_TTL_MS);
+}
+
 interface VideoPageClientProps {
 	models: ApiModel[];
 	providers: ApiProvider[];
@@ -50,6 +62,8 @@ export default function VideoPageClient({
 	selectedProject,
 }: VideoPageClientProps) {
 	const { user, isLoading: isUserLoading } = useUser();
+	const posthog = usePostHog();
+	const fetchClient = useFetchClient();
 	const pathname = usePathname();
 	const router = useRouter();
 	const searchParams = useSearchParams();
@@ -80,9 +94,39 @@ export default function VideoPageClient({
 		() => searchParams.get("compare") === "1",
 	);
 	const [prompt, setPrompt] = useState("");
-	const [galleryItems, setGalleryItems] = useState<VideoGalleryItem[]>([]);
+	const [galleryItems, setGalleryItems] = useState<VideoGalleryItem[]>(() => {
+		if (typeof window === "undefined") {
+			return [];
+		}
+		try {
+			const stored = localStorage.getItem(VIDEO_GALLERY_KEY);
+			if (!stored) {
+				return [];
+			}
+			return filterRecentGalleryItems(JSON.parse(stored) as VideoGalleryItem[]);
+		} catch {
+			return [];
+		}
+	});
 	const [isGenerating, setIsGenerating] = useState(false);
 	const [showTopUp, setShowTopUp] = useState(false);
+
+	useEffect(() => {
+		try {
+			if (galleryItems.length === 0) {
+				localStorage.removeItem(VIDEO_GALLERY_KEY);
+				return;
+			}
+			const fresh = filterRecentGalleryItems(galleryItems);
+			if (fresh.length === 0) {
+				localStorage.removeItem(VIDEO_GALLERY_KEY);
+			} else {
+				localStorage.setItem(VIDEO_GALLERY_KEY, JSON.stringify(fresh));
+			}
+		} catch {
+			// Ignore quota/private-mode errors
+		}
+	}, [galleryItems]);
 
 	const [videoSize, setVideoSize] = useState<VideoSize>("1280x720");
 	const [videoDuration, setVideoDuration] = useState<VideoDuration>(8);
@@ -342,6 +386,16 @@ export default function VideoPageClient({
 
 			const currentPrompt = effectivePrompt.trim();
 			setIsGenerating(true);
+			posthog.capture("playground_video_generated", {
+				models: selectedModels,
+				model_count: selectedModels.length,
+				comparison_mode: comparisonMode,
+				video_size: videoSize,
+				video_duration: videoDuration,
+				audio_enabled: effectiveAudioEnabled,
+				has_frame_inputs: !!(frameInputs.start ?? frameInputs.end),
+				has_reference_images: referenceImages.length > 0,
+			});
 
 			const itemId = crypto.randomUUID();
 
@@ -434,12 +488,11 @@ export default function VideoPageClient({
 
 						for await (const updatedJob of pollVideoJob(
 							job.id,
+							fetchClient,
 							controller.signal,
 						)) {
 							if (updatedJob.status === "completed") {
-								const videoUrl =
-									updatedJob.content?.[0]?.url ??
-									`/api/video/${updatedJob.id}/content`;
+								const videoUrl = `/api/video/${updatedJob.id}/content`;
 								updateGalleryModel(itemId, modelId, {
 									job: updatedJob,
 									videoUrl,
@@ -487,6 +540,7 @@ export default function VideoPageClient({
 			selectedModels,
 			isGenerating,
 			getModelName,
+			fetchClient,
 			videoSize,
 			videoDuration,
 			effectiveAudioEnabled,

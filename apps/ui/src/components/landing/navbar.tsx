@@ -5,6 +5,7 @@ import {
 	BookOpen,
 	Bot,
 	ChevronDown,
+	Code,
 	Github,
 	Menu,
 	MessagesSquare,
@@ -151,6 +152,16 @@ export const Navbar = ({
 			gradient:
 				"hover:from-pink-500/20 hover:to-rose-600/30 hover:shadow-pink-500/10 group-hover/product:text-pink-500 dark:group-hover/product:text-pink-400",
 		},
+		{
+			title: "DevPass",
+			href: "https://code.llmgateway.io",
+			description:
+				"Fixed-price monthly plans for Claude Code, Cursor, and every coding tool.",
+			icon: Code,
+			gradient:
+				"hover:from-indigo-500/20 hover:to-blue-600/30 hover:shadow-indigo-500/10 group-hover/product:text-indigo-500 dark:group-hover/product:text-indigo-400",
+			external: true,
+		},
 	];
 
 	const resourcesLinks: Array<{
@@ -190,9 +201,9 @@ export const Navbar = ({
 			description: "Compare models side by side.",
 		},
 		{
-			title: "Cost Simulator",
-			href: "/cost-simulator",
-			description: "Calculate your LLM cost savings instantly.",
+			title: "Token Cost Calculator",
+			href: "/token-cost-calculator",
+			description: "Calculate your LLM token costs and savings instantly.",
 		},
 		{
 			title: "Referral Program",

@@ -141,6 +141,7 @@ import {
 import {
 	type RoutingAttempt,
 	getErrorType,
+	isRetryableError,
 	MAX_RETRIES,
 	providerRetryKey,
 	selectNextProvider,
@@ -992,6 +993,19 @@ chat.openapi(completions, async (c) => {
 			message: "Could not find organization",
 		});
 	}
+
+	const retryProjectContext = {
+		mode: project.mode,
+		organizationId: project.organizationId,
+	};
+	const retryOrganizationContext = {
+		id: organization.id,
+		credits: organization.credits,
+		devPlan: organization.devPlan,
+		devPlanCreditsLimit: organization.devPlanCreditsLimit,
+		devPlanCreditsUsed: organization.devPlanCreditsUsed,
+		devPlanExpiresAt: organization.devPlanExpiresAt,
+	};
 
 	// Run guardrails check for enterprise organizations
 	let guardrailResult: Awaited<ReturnType<typeof checkGuardrails>> | undefined;
@@ -3507,6 +3521,145 @@ chat.openapi(completions, async (c) => {
 	}
 
 	const startTime = Date.now();
+	const failedEnvKeyIndicesByProvider = new Map<string, Set<number>>();
+	const failedTrackedKeyIdsByProvider = new Map<string, Set<string>>();
+
+	function rememberFailedKey(
+		providerId: string,
+		region: string | undefined,
+		options: {
+			envVarName?: string;
+			configIndex?: number;
+			providerKeyId?: string;
+		},
+	): void {
+		const retryKey = providerRetryKey(providerId, region);
+
+		if (options.envVarName !== undefined && options.configIndex !== undefined) {
+			const failedIndices =
+				failedEnvKeyIndicesByProvider.get(retryKey) ?? new Set<number>();
+			failedIndices.add(options.configIndex);
+			failedEnvKeyIndicesByProvider.set(retryKey, failedIndices);
+		}
+
+		if (options.providerKeyId) {
+			const failedKeyIds =
+				failedTrackedKeyIdsByProvider.get(retryKey) ?? new Set<string>();
+			failedKeyIds.add(options.providerKeyId);
+			failedTrackedKeyIdsByProvider.set(retryKey, failedKeyIds);
+		}
+	}
+
+	async function resolveProviderContextForRetry(
+		providerMapping: {
+			providerId: string;
+			modelName: string;
+			region?: string;
+		},
+		streamValue: boolean,
+	) {
+		const retryKey = providerRetryKey(
+			providerMapping.providerId,
+			providerMapping.region,
+		);
+		return await resolveProviderContext(
+			providerMapping,
+			retryProjectContext,
+			retryOrganizationContext,
+			modelInfo,
+			originalRequestParams,
+			{
+				requestId,
+				stream: streamValue,
+				effectiveStream,
+				messages: messages as BaseMessage[],
+				response_format,
+				tools,
+				tool_choice,
+				reasoning_effort,
+				reasoning_max_tokens,
+				effort,
+				webSearchTool,
+				image_config,
+				sensitive_word_check,
+				maxImageSizeMB,
+				userPlan,
+				hasExistingToolCalls,
+				customProviderName,
+				webSearchEnabled: !!webSearchTool,
+				excludedEnvKeyIndices: failedEnvKeyIndicesByProvider.get(retryKey),
+				excludedProviderKeyIds: failedTrackedKeyIdsByProvider.get(retryKey),
+			},
+		);
+	}
+
+	function applyResolvedProviderContext(
+		ctx: Awaited<ReturnType<typeof resolveProviderContext>>,
+	): void {
+		usedProvider = ctx.usedProvider;
+		usedModel = ctx.usedModel;
+		usedModelFormatted = ctx.usedModelFormatted;
+		usedModelMapping = ctx.usedModelMapping;
+		baseModelName = ctx.baseModelName;
+		usedToken = ctx.usedToken;
+		providerKey = ctx.providerKey;
+		configIndex = ctx.configIndex;
+		envVarName = ctx.envVarName;
+		url = ctx.url;
+		requestBody = ctx.requestBody;
+		useResponsesApi = ctx.useResponsesApi;
+		requestCanBeCanceled = ctx.requestCanBeCanceled;
+		isImageGeneration = ctx.isImageGeneration;
+		supportsReasoning = ctx.supportsReasoning;
+		splitTaggedReasoning = ctx.splitTaggedReasoning ?? false;
+		temperature = ctx.temperature;
+		max_tokens = ctx.max_tokens;
+		top_p = ctx.top_p;
+		frequency_penalty = ctx.frequency_penalty;
+		presence_penalty = ctx.presence_penalty;
+		usedRegion = ctx.usedRegion;
+	}
+
+	async function tryResolveAlternateKeyForCurrentProvider(
+		streamValue: boolean,
+	): Promise<Awaited<ReturnType<typeof resolveProviderContext>> | null> {
+		if (!usedProvider || !usedModel) {
+			return null;
+		}
+
+		const currentProviderKeyId = providerKey?.id;
+		const currentEnvVarName = envVarName;
+		const currentConfigIndex = configIndex;
+		const currentToken = usedToken;
+
+		try {
+			const nextContext = await resolveProviderContextForRetry(
+				{
+					providerId: usedProvider,
+					modelName: usedModel,
+					region: usedRegion,
+				},
+				streamValue,
+			);
+
+			const isDifferentTrackedKey =
+				nextContext.providerKey?.id !== undefined &&
+				nextContext.providerKey.id !== currentProviderKeyId;
+			const isDifferentEnvKey =
+				nextContext.envVarName !== undefined &&
+				(nextContext.envVarName !== currentEnvVarName ||
+					nextContext.configIndex !== currentConfigIndex);
+			const isDifferentToken = nextContext.usedToken !== currentToken;
+
+			if (!isDifferentTrackedKey && !isDifferentEnvKey && !isDifferentToken) {
+				return null;
+			}
+
+			return nextContext;
+		} catch {
+			return null;
+		}
+	}
 
 	// Handle streaming response if requested
 	// For image generation models, we skip real streaming and use fake streaming later
@@ -3748,65 +3901,11 @@ chat.openapi(completions, async (c) => {
 						}
 
 						try {
-							const ctx = await resolveProviderContext(
+							const ctx = await resolveProviderContextForRetry(
 								nextProvider,
-								{
-									mode: project.mode,
-									organizationId: project.organizationId,
-								},
-								{
-									id: organization.id,
-									credits: organization.credits,
-									devPlan: organization.devPlan,
-									devPlanCreditsLimit: organization.devPlanCreditsLimit,
-									devPlanCreditsUsed: organization.devPlanCreditsUsed,
-									devPlanExpiresAt: organization.devPlanExpiresAt,
-								},
-								modelInfo,
-								originalRequestParams,
-								{
-									requestId,
-									stream: true,
-									effectiveStream,
-									messages: messages as BaseMessage[],
-									response_format,
-									tools,
-									tool_choice,
-									reasoning_effort,
-									reasoning_max_tokens,
-									effort,
-									webSearchTool,
-									image_config,
-									sensitive_word_check,
-									maxImageSizeMB,
-									userPlan,
-									hasExistingToolCalls,
-									customProviderName,
-									webSearchEnabled: !!webSearchTool,
-								},
+								true,
 							);
-							usedProvider = ctx.usedProvider;
-							usedModel = ctx.usedModel;
-							usedModelFormatted = ctx.usedModelFormatted;
-							usedModelMapping = ctx.usedModelMapping;
-							baseModelName = ctx.baseModelName;
-							usedToken = ctx.usedToken;
-							providerKey = ctx.providerKey;
-							configIndex = ctx.configIndex;
-							envVarName = ctx.envVarName;
-							url = ctx.url;
-							requestBody = ctx.requestBody;
-							useResponsesApi = ctx.useResponsesApi;
-							requestCanBeCanceled = ctx.requestCanBeCanceled;
-							isImageGeneration = ctx.isImageGeneration;
-							supportsReasoning = ctx.supportsReasoning;
-							splitTaggedReasoning = ctx.splitTaggedReasoning ?? false;
-							temperature = ctx.temperature;
-							max_tokens = ctx.max_tokens;
-							top_p = ctx.top_p;
-							frequency_penalty = ctx.frequency_penalty;
-							presence_penalty = ctx.presence_penalty;
-							usedRegion = ctx.usedRegion;
+							applyResolvedProviderContext(ctx);
 						} catch {
 							failedProviderIds.add(
 								providerRetryKey(nextProvider.providerId, nextProvider.region),
@@ -4164,6 +4263,19 @@ chat.openapi(completions, async (c) => {
 							// Extract plugin IDs for logging (fetch error)
 							const fetchErrorPluginIds = plugins?.map((p) => p.id) ?? [];
 
+							let sameProviderRetryContext: Awaited<
+								ReturnType<typeof resolveProviderContext>
+							> | null = null;
+							if (!noFallback && isRetryableError(0)) {
+								rememberFailedKey(usedProvider, usedRegion, {
+									envVarName,
+									configIndex,
+									providerKeyId: providerKey?.id,
+								});
+								sameProviderRetryContext =
+									await tryResolveAlternateKeyForCurrentProvider(true);
+							}
+
 							// Check if we should retry before logging so we can mark the log as retried
 							const willRetryFetch = shouldRetryRequest({
 								requestedProvider,
@@ -4176,6 +4288,8 @@ chat.openapi(completions, async (c) => {
 									1,
 								usedProvider,
 							});
+							const willRetrySameProvider = sameProviderRetryContext !== null;
+							const willRetryRequest = willRetrySameProvider || willRetryFetch;
 
 							const baseLogEntry = createLogEntry(
 								requestId,
@@ -4247,8 +4361,8 @@ chat.openapi(completions, async (c) => {
 								dataStorageCost: "0",
 								cached: false,
 								toolResults: null,
-								retried: willRetryFetch,
-								retriedByLogId: willRetryFetch ? finalLogId : null,
+								retried: willRetryRequest,
+								retriedByLogId: willRetryRequest ? finalLogId : null,
 							});
 
 							// Report key health for the selected token source
@@ -4257,6 +4371,20 @@ chat.openapi(completions, async (c) => {
 							}
 							if (providerKey?.id) {
 								reportTrackedKeyError(providerKey.id, 0);
+							}
+
+							if (willRetrySameProvider && sameProviderRetryContext) {
+								routingAttempts.push({
+									provider: usedProvider,
+									model: baseModelName,
+									...(usedRegion && { region: usedRegion }),
+									status_code: 0,
+									error_type: getErrorType(0),
+									succeeded: false,
+								});
+								applyResolvedProviderContext(sameProviderRetryContext);
+								retryAttempt--;
+								continue;
 							}
 
 							if (willRetryFetch) {
@@ -4336,6 +4464,19 @@ chat.openapi(completions, async (c) => {
 						// Extract plugin IDs for logging
 						const streamingErrorPluginIds = plugins?.map((p) => p.id) ?? [];
 
+						let sameProviderRetryContext: Awaited<
+							ReturnType<typeof resolveProviderContext>
+						> | null = null;
+						if (!noFallback && isRetryableError(res.status)) {
+							rememberFailedKey(usedProvider, usedRegion, {
+								envVarName,
+								configIndex,
+								providerKeyId: providerKey?.id,
+							});
+							sameProviderRetryContext =
+								await tryResolveAlternateKeyForCurrentProvider(true);
+						}
+
 						// Check if we should retry before logging so we can mark the log as retried
 						const willRetryHttpError = shouldRetryRequest({
 							requestedProvider,
@@ -4348,6 +4489,9 @@ chat.openapi(completions, async (c) => {
 								1,
 							usedProvider,
 						});
+						const willRetrySameProvider = sameProviderRetryContext !== null;
+						const willRetryRequest =
+							willRetrySameProvider || willRetryHttpError;
 
 						const baseLogEntry = createLogEntry(
 							requestId,
@@ -4433,8 +4577,8 @@ chat.openapi(completions, async (c) => {
 							dataStorageCost: "0",
 							cached: false,
 							toolResults: null,
-							retried: willRetryHttpError,
-							retriedByLogId: willRetryHttpError ? finalLogId : null,
+							retried: willRetryRequest,
+							retriedByLogId: willRetryRequest ? finalLogId : null,
 						});
 
 						// Report key health for the selected token source
@@ -4453,6 +4597,20 @@ chat.openapi(completions, async (c) => {
 								res.status,
 								errorResponseText,
 							);
+						}
+
+						if (willRetrySameProvider && sameProviderRetryContext) {
+							routingAttempts.push({
+								provider: usedProvider,
+								model: baseModelName,
+								...(usedRegion && { region: usedRegion }),
+								status_code: res.status,
+								error_type: getErrorType(res.status),
+								succeeded: false,
+							});
+							applyResolvedProviderContext(sameProviderRetryContext);
+							retryAttempt--;
+							continue;
 						}
 
 						if (willRetryHttpError) {
@@ -6873,65 +7031,8 @@ chat.openapi(completions, async (c) => {
 			}
 
 			try {
-				const ctx = await resolveProviderContext(
-					nextProvider,
-					{
-						mode: project.mode,
-						organizationId: project.organizationId,
-					},
-					{
-						id: organization.id,
-						credits: organization.credits,
-						devPlan: organization.devPlan,
-						devPlanCreditsLimit: organization.devPlanCreditsLimit,
-						devPlanCreditsUsed: organization.devPlanCreditsUsed,
-						devPlanExpiresAt: organization.devPlanExpiresAt,
-					},
-					modelInfo,
-					originalRequestParams,
-					{
-						requestId,
-						stream,
-						effectiveStream,
-						messages: messages as BaseMessage[],
-						response_format,
-						tools,
-						tool_choice,
-						reasoning_effort,
-						reasoning_max_tokens,
-						effort,
-						webSearchTool,
-						image_config,
-						sensitive_word_check,
-						maxImageSizeMB,
-						userPlan,
-						hasExistingToolCalls,
-						customProviderName,
-						webSearchEnabled: !!webSearchTool,
-					},
-				);
-				usedProvider = ctx.usedProvider;
-				usedModel = ctx.usedModel;
-				usedModelFormatted = ctx.usedModelFormatted;
-				usedModelMapping = ctx.usedModelMapping;
-				baseModelName = ctx.baseModelName;
-				usedToken = ctx.usedToken;
-				providerKey = ctx.providerKey;
-				configIndex = ctx.configIndex;
-				envVarName = ctx.envVarName;
-				url = ctx.url;
-				requestBody = ctx.requestBody;
-				useResponsesApi = ctx.useResponsesApi;
-				requestCanBeCanceled = ctx.requestCanBeCanceled;
-				isImageGeneration = ctx.isImageGeneration;
-				supportsReasoning = ctx.supportsReasoning;
-				splitTaggedReasoning = ctx.splitTaggedReasoning ?? false;
-				temperature = ctx.temperature;
-				max_tokens = ctx.max_tokens;
-				top_p = ctx.top_p;
-				frequency_penalty = ctx.frequency_penalty;
-				presence_penalty = ctx.presence_penalty;
-				usedRegion = ctx.usedRegion;
+				const ctx = await resolveProviderContextForRetry(nextProvider, stream);
+				applyResolvedProviderContext(ctx);
 			} catch {
 				failedProviderIds.add(
 					providerRetryKey(nextProvider.providerId, nextProvider.region),
@@ -7030,6 +7131,19 @@ chat.openapi(completions, async (c) => {
 			const nonStreamingFetchErrorPluginIds = plugins?.map((p) => p.id) ?? [];
 
 			// Check if we should retry before logging so we can mark the log as retried
+			let sameProviderRetryContext: Awaited<
+				ReturnType<typeof resolveProviderContext>
+			> | null = null;
+			if (!noFallback && isRetryableError(0)) {
+				rememberFailedKey(usedProvider, usedRegion, {
+					envVarName,
+					configIndex,
+					providerKeyId: providerKey?.id,
+				});
+				sameProviderRetryContext =
+					await tryResolveAlternateKeyForCurrentProvider(stream);
+			}
+
 			const willRetryFetchNonStreaming = shouldRetryRequest({
 				requestedProvider,
 				noFallback,
@@ -7041,6 +7155,9 @@ chat.openapi(completions, async (c) => {
 					1,
 				usedProvider,
 			});
+			const willRetrySameProvider = sameProviderRetryContext !== null;
+			const willRetryRequest =
+				willRetrySameProvider || willRetryFetchNonStreaming;
 
 			const baseLogEntry = createLogEntry(
 				requestId,
@@ -7113,8 +7230,8 @@ chat.openapi(completions, async (c) => {
 				dataStorageCost: "0",
 				cached: false,
 				toolResults: null,
-				retried: willRetryFetchNonStreaming,
-				retriedByLogId: willRetryFetchNonStreaming ? finalLogId : null,
+				retried: willRetryRequest,
+				retriedByLogId: willRetryRequest ? finalLogId : null,
 			});
 
 			// Report key health for the selected token source
@@ -7123,6 +7240,20 @@ chat.openapi(completions, async (c) => {
 			}
 			if (providerKey?.id) {
 				reportTrackedKeyError(providerKey.id, 0);
+			}
+
+			if (willRetrySameProvider && sameProviderRetryContext) {
+				routingAttempts.push({
+					provider: usedProvider,
+					model: baseModelName,
+					...(usedRegion && { region: usedRegion }),
+					status_code: 0,
+					error_type: getErrorType(0),
+					succeeded: false,
+				});
+				applyResolvedProviderContext(sameProviderRetryContext);
+				retryAttempt--;
+				continue;
 			}
 
 			if (willRetryFetchNonStreaming) {
@@ -7449,6 +7580,19 @@ chat.openapi(completions, async (c) => {
 			// Extract plugin IDs for logging
 			const providerErrorPluginIds = plugins?.map((p) => p.id) ?? [];
 
+			let sameProviderRetryContext: Awaited<
+				ReturnType<typeof resolveProviderContext>
+			> | null = null;
+			if (!noFallback && isRetryableError(res.status)) {
+				rememberFailedKey(usedProvider, usedRegion, {
+					envVarName,
+					configIndex,
+					providerKeyId: providerKey?.id,
+				});
+				sameProviderRetryContext =
+					await tryResolveAlternateKeyForCurrentProvider(stream);
+			}
+
 			// Check if we should retry before logging so we can mark the log as retried
 			const willRetryHttpNonStreaming = shouldRetryRequest({
 				requestedProvider,
@@ -7461,6 +7605,9 @@ chat.openapi(completions, async (c) => {
 					1,
 				usedProvider,
 			});
+			const willRetrySameProvider = sameProviderRetryContext !== null;
+			const willRetryRequest =
+				willRetrySameProvider || willRetryHttpNonStreaming;
 
 			const baseLogEntry = createLogEntry(
 				requestId,
@@ -7552,8 +7699,8 @@ chat.openapi(completions, async (c) => {
 				dataStorageCost: "0",
 				cached: false,
 				toolResults: null,
-				retried: willRetryHttpNonStreaming,
-				retriedByLogId: willRetryHttpNonStreaming ? finalLogId : null,
+				retried: willRetryRequest,
+				retriedByLogId: willRetryRequest ? finalLogId : null,
 			});
 
 			// Report key health for the selected token source
@@ -7563,6 +7710,20 @@ chat.openapi(completions, async (c) => {
 			}
 			if (providerKey?.id && finishReason !== "content_filter") {
 				reportTrackedKeyError(providerKey.id, res.status, errorResponseText);
+			}
+
+			if (willRetrySameProvider && sameProviderRetryContext) {
+				routingAttempts.push({
+					provider: usedProvider,
+					model: baseModelName,
+					...(usedRegion && { region: usedRegion }),
+					status_code: res.status,
+					error_type: getErrorType(res.status),
+					succeeded: false,
+				});
+				applyResolvedProviderContext(sameProviderRetryContext);
+				retryAttempt--;
+				continue;
 			}
 
 			if (willRetryHttpNonStreaming) {

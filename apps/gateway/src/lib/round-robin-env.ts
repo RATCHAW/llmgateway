@@ -38,21 +38,37 @@ function selectRoundRobinValue(
 	envVarName: string,
 	value: string,
 	_advanceCounter: boolean,
+	excludedIndices: ReadonlySet<number> = new Set(),
 ): RoundRobinResult {
 	const values = parseCommaSeparatedEnv(value);
+	const availableValues = values.filter(
+		(_, index) => !excludedIndices.has(index),
+	);
 
 	if (values.length === 0) {
 		throw new Error(`Environment variable ${envVarName} is empty`);
 	}
 
-	if (values.length === 1) {
-		return { value: values[0], index: 0 };
+	if (availableValues.length === 0) {
+		throw new Error(`No eligible values remain for ${envVarName}`);
+	}
+
+	if (availableValues.length === 1) {
+		const selectedIndex = values.findIndex(
+			(candidate, index) =>
+				!excludedIndices.has(index) && candidate === availableValues[0],
+		);
+		return { value: availableValues[0], index: selectedIndex };
 	}
 
 	// Collect metrics and scores for all healthy keys.
 	const keyScores: KeyScore[] = [];
 
 	for (let i = 0; i < values.length; i++) {
+		if (excludedIndices.has(i)) {
+			continue;
+		}
+
 		const metrics = getKeyMetrics(envVarName, i);
 
 		// Skip permanently blacklisted keys entirely
@@ -74,9 +90,12 @@ function selectRoundRobinValue(
 		});
 	}
 
-	// If all keys are unhealthy, fall back to the primary key.
+	// If all remaining keys are unhealthy, fall back to the first non-excluded key.
 	if (keyScores.length === 0) {
-		return { value: values[0], index: 0 };
+		const fallbackIndex = values.findIndex(
+			(_, index) => !excludedIndices.has(index),
+		);
+		return { value: values[fallbackIndex], index: fallbackIndex };
 	}
 
 	// Keep the first key as the default as long as its uptime isn't materially
@@ -109,8 +128,9 @@ function selectRoundRobinValue(
 export function getRoundRobinValue(
 	envVarName: string,
 	value: string,
+	excludedIndices?: ReadonlySet<number>,
 ): RoundRobinResult {
-	return selectRoundRobinValue(envVarName, value, true);
+	return selectRoundRobinValue(envVarName, value, true, excludedIndices);
 }
 
 /**
@@ -120,8 +140,9 @@ export function getRoundRobinValue(
 export function peekRoundRobinValue(
 	envVarName: string,
 	value: string,
+	excludedIndices?: ReadonlySet<number>,
 ): RoundRobinResult {
-	return selectRoundRobinValue(envVarName, value, false);
+	return selectRoundRobinValue(envVarName, value, false, excludedIndices);
 }
 
 /**

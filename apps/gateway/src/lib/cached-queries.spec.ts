@@ -273,6 +273,17 @@ describe("Cached Queries - Gateway Database Access", () => {
 			expect(result?.id).toBe("test-provider-key-cached-queries-2");
 		});
 
+		it("should select the next provider key when the current one is excluded", async () => {
+			const result = await findProviderKey(
+				testOrgId,
+				"openai",
+				"request-retry",
+				new Set([testProviderKeyId]),
+			);
+
+			expect(result?.id).toBe("test-provider-key-cached-queries-2");
+		});
+
 		it("should return undefined for non-existent provider", async () => {
 			const result = await findProviderKey(testOrgId, "nonexistent");
 

@@ -41,4 +41,18 @@ describe("getProviderEnv", () => {
 		expect(getProviderEnv("openai").configIndex).toBe(0);
 		expect(getProviderEnv("openai").configIndex).toBe(0);
 	});
+
+	it("can exclude failed keys when retrying the same provider", () => {
+		const secondKey = getProviderEnv("openai", {
+			excludedIndices: new Set([0]),
+		});
+		expect(secondKey.token).toBe("sk-openai-b");
+		expect(secondKey.configIndex).toBe(1);
+
+		const thirdKey = getProviderEnv("openai", {
+			excludedIndices: new Set([0, 1]),
+		});
+		expect(thirdKey.token).toBe("sk-openai-c");
+		expect(thirdKey.configIndex).toBe(2);
+	});
 });

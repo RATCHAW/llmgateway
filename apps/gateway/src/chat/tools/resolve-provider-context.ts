@@ -90,6 +90,8 @@ export interface ProviderContextOptions {
 	hasExistingToolCalls: boolean;
 	customProviderName: string | undefined;
 	webSearchEnabled: boolean;
+	excludedEnvKeyIndices?: ReadonlySet<number>;
+	excludedProviderKeyIds?: ReadonlySet<string>;
 }
 
 interface ProjectInfo {
@@ -161,12 +163,14 @@ export async function resolveProviderContext(
 				project.organizationId,
 				options.customProviderName,
 				options.requestId,
+				options.excludedProviderKeyIds,
 			);
 		} else {
 			providerKey = await findProviderKey(
 				project.organizationId,
 				usedProvider,
 				options.requestId,
+				options.excludedProviderKeyIds,
 			);
 		}
 
@@ -178,7 +182,9 @@ export async function resolveProviderContext(
 
 		usedToken = providerKey.token;
 	} else if (project.mode === "credits") {
-		const envResult = getProviderEnv(usedProvider as Provider);
+		const envResult = getProviderEnv(usedProvider as Provider, {
+			excludedIndices: options.excludedEnvKeyIndices,
+		});
 		usedToken = envResult.token;
 		configIndex = envResult.configIndex;
 		envVarName = envResult.envVarName;
@@ -188,19 +194,23 @@ export async function resolveProviderContext(
 				project.organizationId,
 				options.customProviderName,
 				options.requestId,
+				options.excludedProviderKeyIds,
 			);
 		} else {
 			providerKey = await findProviderKey(
 				project.organizationId,
 				usedProvider,
 				options.requestId,
+				options.excludedProviderKeyIds,
 			);
 		}
 
 		if (providerKey) {
 			usedToken = providerKey.token;
 		} else {
-			const envResult = getProviderEnv(usedProvider as Provider);
+			const envResult = getProviderEnv(usedProvider as Provider, {
+				excludedIndices: options.excludedEnvKeyIndices,
+			});
 			usedToken = envResult.token;
 			configIndex = envResult.configIndex;
 			envVarName = envResult.envVarName;

@@ -208,6 +208,35 @@ describe("fallback and error status code handling", () => {
 		]);
 	}
 
+	async function setupSingleProviderWithMultipleKeys(provider = "together.ai") {
+		await ensureBaseFixtures();
+
+		await db.insert(tables.apiKey).values({
+			id: "token-id",
+			token: "real-token",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		await db.insert(tables.providerKey).values([
+			{
+				id: `${provider}-key-primary`,
+				token: `${provider}-primary-token`,
+				provider,
+				organizationId: "org-id",
+				baseUrl: mockServerUrl,
+			},
+			{
+				id: `${provider}-key-secondary`,
+				token: `${provider}-secondary-token`,
+				provider,
+				organizationId: "org-id",
+				baseUrl: mockServerUrl,
+			},
+		]);
+	}
+
 	async function setRoutingMetrics(
 		modelId: string,
 		providerId: string,
@@ -1948,6 +1977,50 @@ describe("fallback and error status code handling", () => {
 			expect(res.status).toBe(500);
 			const json = await res.json();
 			expect(json).toHaveProperty("error");
+		});
+
+		test("non-streaming: retries another key for the same explicit provider before provider fallback", async () => {
+			await setupSingleProviderWithMultipleKeys("together.ai");
+
+			const res = await app.request("/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: "Bearer real-token",
+				},
+				body: JSON.stringify({
+					model: "together.ai/glm-4.7",
+					messages: [{ role: "user", content: "TRIGGER_FAIL_ONCE hello" }],
+				}),
+			});
+
+			expect(res.status).toBe(200);
+			const json = await res.json();
+
+			expect(json.metadata.used_provider).toBe("together.ai");
+			expect(json.metadata.routing).toBeDefined();
+			expect(json.metadata.routing).toHaveLength(2);
+			expect(json.metadata.routing[0]).toMatchObject({
+				provider: "together.ai",
+				status_code: 500,
+				succeeded: false,
+			});
+			expect(json.metadata.routing[1]).toMatchObject({
+				provider: "together.ai",
+				succeeded: true,
+			});
+
+			const logs = await waitForLogs(2);
+			const successLog = logs.find(
+				(l: Log) => l.finishReason === "stop" || !l.hasError,
+			);
+			expect(successLog?.routingMetadata?.routing).toHaveLength(2);
+			expect(successLog?.routingMetadata?.routing?.[0]?.provider).toBe(
+				"together.ai",
+			);
+			expect(successLog?.routingMetadata?.routing?.[1]?.provider).toBe(
+				"together.ai",
+			);
 		});
 
 		test("streaming: retries on 500 and delivers response on fallback provider", async () => {

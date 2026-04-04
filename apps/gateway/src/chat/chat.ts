@@ -2799,13 +2799,6 @@ chat.openapi(completions, async (c) => {
 
 		usedToken = providerKey.token;
 		usedRegion ??= resolveRegionFromProviderKey(providerKey);
-		// Override with region-specific env var if the DB key doesn't match the requested region
-		if (usedRegion) {
-			const regionToken = getRegionSpecificEnvValue(usedProvider, usedRegion);
-			if (regionToken && regionToken !== usedToken) {
-				usedToken = regionToken;
-			}
-		}
 	} else if (project.mode === "credits") {
 		// Check both regular credits AND dev plan credits
 		const regularCredits = parseFloat(organization.credits ?? "0");
@@ -2872,13 +2865,6 @@ chat.openapi(completions, async (c) => {
 		if (providerKey) {
 			usedToken = providerKey.token;
 			usedRegion ??= resolveRegionFromProviderKey(providerKey);
-			// Override with region-specific env var if the DB key doesn't match the requested region
-			if (usedRegion) {
-				const regionToken = getRegionSpecificEnvValue(usedProvider, usedRegion);
-				if (regionToken && regionToken !== usedToken) {
-					usedToken = regionToken;
-				}
-			}
 		} else {
 			// No API key available, fall back to credits
 			// Check both regular credits AND dev plan credits

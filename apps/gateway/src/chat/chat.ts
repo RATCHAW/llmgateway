@@ -4267,7 +4267,7 @@ chat.openapi(completions, async (c) => {
 							let sameProviderRetryContext: Awaited<
 								ReturnType<typeof resolveProviderContext>
 							> | null = null;
-							if (!noFallback && isRetryableError(0)) {
+							if (isRetryableError(0)) {
 								rememberFailedKey(usedProvider, usedRegion, {
 									envVarName,
 									configIndex,
@@ -4468,7 +4468,7 @@ chat.openapi(completions, async (c) => {
 						let sameProviderRetryContext: Awaited<
 							ReturnType<typeof resolveProviderContext>
 						> | null = null;
-						if (!noFallback && isRetryableError(res.status)) {
+						if (isRetryableError(res.status)) {
 							rememberFailedKey(usedProvider, usedRegion, {
 								envVarName,
 								configIndex,
@@ -7136,7 +7136,7 @@ chat.openapi(completions, async (c) => {
 			let sameProviderRetryContext: Awaited<
 				ReturnType<typeof resolveProviderContext>
 			> | null = null;
-			if (!noFallback && isRetryableError(0)) {
+			if (isRetryableError(0)) {
 				rememberFailedKey(usedProvider, usedRegion, {
 					envVarName,
 					configIndex,
@@ -7585,7 +7585,7 @@ chat.openapi(completions, async (c) => {
 			let sameProviderRetryContext: Awaited<
 				ReturnType<typeof resolveProviderContext>
 			> | null = null;
-			if (!noFallback && isRetryableError(res.status)) {
+			if (isRetryableError(res.status)) {
 				rememberFailedKey(usedProvider, usedRegion, {
 					envVarName,
 					configIndex,

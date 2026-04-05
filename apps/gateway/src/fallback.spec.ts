@@ -2023,6 +2023,52 @@ describe("fallback and error status code handling", () => {
 			);
 		});
 
+		test("non-streaming: retries another key for the same provider when X-No-Fallback is set", async () => {
+			await setupSingleProviderWithMultipleKeys("together.ai");
+
+			const res = await app.request("/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: "Bearer real-token",
+					"X-No-Fallback": "true",
+				},
+				body: JSON.stringify({
+					model: "together.ai/glm-4.7",
+					messages: [{ role: "user", content: "TRIGGER_FAIL_ONCE hello" }],
+				}),
+			});
+
+			expect(res.status).toBe(200);
+			const json = await res.json();
+
+			expect(json.metadata.used_provider).toBe("together.ai");
+			expect(json.metadata.routing).toBeDefined();
+			expect(json.metadata.routing).toHaveLength(2);
+			expect(json.metadata.routing[0]).toMatchObject({
+				provider: "together.ai",
+				status_code: 500,
+				succeeded: false,
+			});
+			expect(json.metadata.routing[1]).toMatchObject({
+				provider: "together.ai",
+				succeeded: true,
+			});
+
+			const logs = await waitForLogs(2);
+			const successLog = logs.find(
+				(l: Log) => l.finishReason === "stop" || !l.hasError,
+			);
+			expect(successLog?.routingMetadata?.noFallback).toBe(true);
+			expect(successLog?.routingMetadata?.routing).toHaveLength(2);
+			expect(successLog?.routingMetadata?.routing?.[0]?.provider).toBe(
+				"together.ai",
+			);
+			expect(successLog?.routingMetadata?.routing?.[1]?.provider).toBe(
+				"together.ai",
+			);
+		});
+
 		test("streaming: retries on 500 and delivers response on fallback provider", async () => {
 			await setupMultiProviderKeys();
 

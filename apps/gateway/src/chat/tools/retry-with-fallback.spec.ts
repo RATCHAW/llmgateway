@@ -20,6 +20,10 @@ describe("isRetryableError", () => {
 		expect(isRetryableError(429)).toBe(true);
 	});
 
+	it("retries on 404 upstream not found", () => {
+		expect(isRetryableError(404)).toBe(true);
+	});
+
 	it("retries on network errors (status 0)", () => {
 		expect(isRetryableError(0)).toBe(true);
 	});
@@ -28,7 +32,6 @@ describe("isRetryableError", () => {
 		expect(isRetryableError(400)).toBe(false);
 		expect(isRetryableError(401)).toBe(false);
 		expect(isRetryableError(403)).toBe(false);
-		expect(isRetryableError(404)).toBe(false);
 		expect(isRetryableError(422)).toBe(false);
 	});
 
@@ -66,7 +69,7 @@ describe("shouldRetryRequest", () => {
 
 	it("does not retry on non-retryable status codes", () => {
 		expect(shouldRetryRequest({ ...defaultOpts, statusCode: 400 })).toBe(false);
-		expect(shouldRetryRequest({ ...defaultOpts, statusCode: 404 })).toBe(false);
+		expect(shouldRetryRequest({ ...defaultOpts, statusCode: 401 })).toBe(false);
 	});
 
 	it("does not retry when max retries exceeded", () => {
@@ -101,6 +104,10 @@ describe("shouldRetryRequest", () => {
 
 	it("retries on 429 rate limit", () => {
 		expect(shouldRetryRequest({ ...defaultOpts, statusCode: 429 })).toBe(true);
+	});
+
+	it("retries on 404 upstream not found", () => {
+		expect(shouldRetryRequest({ ...defaultOpts, statusCode: 404 })).toBe(true);
 	});
 
 	it("retries on network errors (status 0)", () => {

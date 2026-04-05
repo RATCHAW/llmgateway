@@ -1958,6 +1958,58 @@ describe("fallback and error status code handling", () => {
 			expect(log.hasError).toBe(true);
 		});
 
+		test("non-streaming: retries on 404 and succeeds on fallback provider", async () => {
+			await setupMultiProviderKeys();
+
+			const res = await app.request("/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: "Bearer real-token",
+				},
+				body: JSON.stringify({
+					model: "glm-4.7",
+					messages: [{ role: "user", content: "TRIGGER_FAIL_ONCE_404 hello" }],
+				}),
+			});
+
+			expect(res.status).toBe(200);
+			const json = await res.json();
+
+			expect(json).toHaveProperty(["choices", 0, "message", "content"]);
+			expect(json.metadata.routing).toBeDefined();
+			expect(json.metadata.routing.length).toBeGreaterThanOrEqual(2);
+			expect(json.metadata.routing[0]).toMatchObject({
+				status_code: 404,
+				error_type: "upstream_error",
+				succeeded: false,
+			});
+			expect(
+				json.metadata.routing[json.metadata.routing.length - 1],
+			).toMatchObject({
+				succeeded: true,
+			});
+
+			const logs = await waitForLogs(2);
+			const successLog = logs.find(
+				(l: Log) => l.finishReason === "stop" || !l.hasError,
+			);
+			const failedLog = logs.find((l: Log) => l.hasError);
+			const successRouting = successLog?.routingMetadata?.routing;
+			const lastSuccessAttempt = successRouting?.at(-1);
+
+			expect(successRouting?.[0]).toMatchObject({
+				status_code: 404,
+				error_type: "upstream_error",
+				succeeded: false,
+			});
+			expect(lastSuccessAttempt).toMatchObject({
+				succeeded: true,
+			});
+			expect(failedLog?.retried).toBe(true);
+			expect(failedLog?.retriedByLogId).toBe(successLog?.id);
+		});
+
 		test("non-streaming: does not retry when specific provider is requested", async () => {
 			await setupMultiProviderKeys();
 

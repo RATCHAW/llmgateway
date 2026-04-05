@@ -748,6 +748,23 @@ mockOpenAIServer.post("/v1/chat/completions", async (c) => {
 	}
 
 	// Check if this request should fail on the first attempt but succeed on retry
+	if (userMessage.includes("TRIGGER_FAIL_ONCE_404")) {
+		failOnceCounter++;
+		if (failOnceCounter === 1) {
+			c.status(404);
+			return c.json({
+				error: {
+					message: "The model 'nonexistent-model' does not exist.",
+					type: "invalid_request_error",
+					param: "model",
+					code: "model_not_found",
+				},
+			});
+		}
+		// Subsequent requests succeed - fall through to normal response
+	}
+
+	// Check if this request should fail on the first attempt but succeed on retry
 	if (userMessage.includes("TRIGGER_FAIL_ONCE")) {
 		failOnceCounter++;
 		if (failOnceCounter === 1) {

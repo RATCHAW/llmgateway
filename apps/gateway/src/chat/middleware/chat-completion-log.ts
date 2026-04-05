@@ -96,6 +96,16 @@ function getRawRequestDetails(rawRequest: unknown): {
 	}
 }
 
+async function getRawRequestPreview(
+	state: ChatCompletionLogState,
+): Promise<unknown> {
+	state.rawRequestPreviewPromise ??= state.rawRequestPreview
+		?.json()
+		.catch(() => undefined);
+
+	return state.rawRequestPreviewPromise;
+}
+
 async function buildFallbackBaseLogEntry(
 	c: Context<ServerTypes>,
 	state: ChatCompletionLogState,
@@ -126,9 +136,7 @@ async function buildFallbackBaseLogEntry(
 		return null;
 	}
 
-	const rawRequest = await state.rawRequestPreviewPromise?.catch(
-		() => undefined,
-	);
+	const rawRequest = await getRawRequestPreview(state);
 	const rawRequestDetails = getRawRequestDetails(rawRequest);
 
 	updateBaseLogOptions(c, {
@@ -312,10 +320,7 @@ export const chatCompletionLogMiddleware = createMiddleware<ServerTypes>(
 		const state: ChatCompletionLogState = {
 			pendingLogs: [],
 			clientErrorSynthesized: false,
-			rawRequestPreviewPromise: c.req.raw
-				.clone()
-				.json()
-				.catch(() => undefined),
+			rawRequestPreview: c.req.raw.clone(),
 		};
 		c.set("chatCompletionLogState", state);
 

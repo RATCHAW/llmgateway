@@ -12,6 +12,7 @@ import type { Context } from "hono";
 export interface ChatCompletionLogState {
 	pendingLogs: LogInsertData[];
 	baseLogOptions?: Partial<CreateLogEntryOptions>;
+	rawRequestPreview?: Request;
 	rawRequestPreviewPromise?: Promise<unknown>;
 	streamCompletion?: Promise<void>;
 	resolveStreamCompletion?: () => void;

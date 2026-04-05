@@ -1,61 +1,25 @@
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 
-import {
-	getProviderEnvVar,
-	providers,
-	type Provider,
-} from "@llmgateway/models";
+const API_KEY_HASH_SECRET_ENV = "LLM_GATEWAY_API_KEY_HASH_SECRET";
+const DEV_API_KEY_HASH_SECRET = "llmgateway-dev-api-key-hash-secret";
 
-import { parseCommaSeparatedEnv } from "./round-robin-env.js";
-
-const tokenFingerprintCache = new Map<string, string>();
-
-function computeApiKeyFingerprint(token: string): string {
-	return createHash("sha256").update(token).digest("hex");
-}
-
-function warmProviderEnvFingerprints(): void {
-	const envVarNames = new Set<string>();
-
-	for (const provider of providers) {
-		const envVarName = getProviderEnvVar(provider.id as Provider);
-		if (envVarName) {
-			envVarNames.add(envVarName);
-		}
+function getApiKeyHashSecret(): string {
+	const configuredSecret = process.env[API_KEY_HASH_SECRET_ENV]?.trim();
+	if (configuredSecret) {
+		return configuredSecret;
 	}
 
-	for (const [envVarName, envValue] of Object.entries(process.env)) {
-		if (!envValue) {
-			continue;
-		}
-
-		const matchesProviderEnv = [...envVarNames].some(
-			(baseEnvVarName) =>
-				envVarName === baseEnvVarName ||
-				envVarName.startsWith(`${baseEnvVarName}__`),
+	if (process.env.NODE_ENV === "production") {
+		throw new Error(
+			`${API_KEY_HASH_SECRET_ENV} is required in production to hash logged provider API keys`,
 		);
-
-		if (!matchesProviderEnv) {
-			continue;
-		}
-
-		for (const token of parseCommaSeparatedEnv(envValue)) {
-			if (!tokenFingerprintCache.has(token)) {
-				tokenFingerprintCache.set(token, computeApiKeyFingerprint(token));
-			}
-		}
 	}
-}
 
-warmProviderEnvFingerprints();
+	return DEV_API_KEY_HASH_SECRET;
+}
 
 export function getApiKeyFingerprint(token: string): string {
-	const existingFingerprint = tokenFingerprintCache.get(token);
-	if (existingFingerprint) {
-		return existingFingerprint;
-	}
-
-	const fingerprint = computeApiKeyFingerprint(token);
-	tokenFingerprintCache.set(token, fingerprint);
-	return fingerprint;
+	return createHmac("sha256", getApiKeyHashSecret())
+		.update(token)
+		.digest("hex");
 }

@@ -103,7 +103,7 @@ async function getRawRequestPreview(
 		?.json()
 		.catch(() => undefined);
 
-	return state.rawRequestPreviewPromise;
+	return await state.rawRequestPreviewPromise;
 }
 
 async function buildFallbackBaseLogEntry(

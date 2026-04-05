@@ -389,7 +389,7 @@ export function parseProviderResponse(
 
 			// If candidatesTokenCount is missing, estimate it from the content or set to 0
 			if (rawCandidates === null) {
-				if (content) {
+				if (content && images.length === 0) {
 					const estimation = estimateTokens(
 						usedProvider,
 						[],
@@ -399,7 +399,7 @@ export function parseProviderResponse(
 					);
 					rawCandidates = estimation.calculatedCompletionTokens ?? 0;
 				} else {
-					// No content means 0 completion tokens (e.g., MAX_TOKENS with only reasoning)
+					// No real text content (image-only or empty) means 0 completion tokens
 					rawCandidates = 0;
 				}
 			}

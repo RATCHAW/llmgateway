@@ -69,6 +69,7 @@ export interface RoutingMetadata {
 	availableProviders: string[];
 	selectedProvider: string;
 	selectionReason: string;
+	usedApiKeyHash?: string;
 	providerScores: Array<{
 		providerId: string;
 		region?: string;
@@ -106,9 +107,11 @@ export interface RoutingMetadata {
 	routing?: Array<{
 		provider: string;
 		model: string;
+		region?: string;
 		status_code: number;
 		error_type: string;
 		succeeded: boolean;
+		apiKeyHash?: string;
 	}>;
 }
 

@@ -68,6 +68,9 @@ export function LogCard({
 		return `${(ms / 1000).toFixed(2)}s`;
 	};
 
+	const formatApiKeyHash = (hash: string) =>
+		hash.length <= 18 ? hash : `${hash.slice(0, 12)}...${hash.slice(-6)}`;
+
 	// Recursively render params object
 	const renderParams = (
 		obj: Record<string, any>,
@@ -351,6 +354,14 @@ export function LogCard({
 												</span>
 											</div>
 										)}
+										{log.routingMetadata.usedApiKeyHash && (
+											<div className="flex justify-between">
+												<span className="text-muted-foreground">Key</span>
+												<span className="font-mono">
+													{formatApiKeyHash(log.routingMetadata.usedApiKeyHash)}
+												</span>
+											</div>
+										)}
 										{log.routingMetadata.availableProviders &&
 											log.routingMetadata.availableProviders.length > 0 && (
 												<div className="flex justify-between">
@@ -463,6 +474,11 @@ export function LogCard({
 																	{attempt.region && (
 																		<span className="text-muted-foreground">
 																			({attempt.region})
+																		</span>
+																	)}
+																	{attempt.apiKeyHash && (
+																		<span className="text-muted-foreground">
+																			key {formatApiKeyHash(attempt.apiKeyHash)}
 																		</span>
 																	)}
 																</span>

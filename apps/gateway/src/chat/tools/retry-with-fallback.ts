@@ -7,6 +7,7 @@ export interface RoutingAttempt {
 	status_code: number;
 	error_type: string;
 	succeeded: boolean;
+	apiKeyHash?: string;
 }
 
 /**

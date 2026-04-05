@@ -543,6 +543,7 @@ export const log = pgTable(
 			availableProviders?: string[];
 			selectedProvider?: string;
 			selectionReason?: string;
+			usedApiKeyHash?: string;
 			providerScores?: Array<{
 				providerId: string;
 				region?: string;
@@ -573,6 +574,7 @@ export const log = pgTable(
 				status_code: number;
 				error_type: string;
 				succeeded: boolean;
+				apiKeyHash?: string;
 			}>;
 		}>(),
 		processedAt: timestamp(),
@@ -704,6 +706,7 @@ export const videoJob = pgTable(
 			availableProviders?: string[];
 			selectedProvider?: string;
 			selectionReason?: string;
+			usedApiKeyHash?: string;
 			providerScores?: Array<{
 				providerId: string;
 				region?: string;
@@ -734,6 +737,7 @@ export const videoJob = pgTable(
 				status_code: number;
 				error_type: string;
 				succeeded: boolean;
+				apiKeyHash?: string;
 			}>;
 		}>(),
 		upstreamCreateResponse: jsonb(),

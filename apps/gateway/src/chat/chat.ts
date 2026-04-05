@@ -4,6 +4,7 @@ import { HTTPException } from "hono/http-exception";
 import { streamSSE } from "hono/streaming";
 
 import { validateSource } from "@/chat/tools/validate-source.js";
+import { getApiKeyFingerprint } from "@/lib/api-key-fingerprint.js";
 import {
 	reportKeyError,
 	reportKeySuccess,
@@ -449,6 +450,46 @@ function addContentFilterRoutingMetadata(
 	};
 }
 
+function withUsedApiKeyHash(
+	routingMetadata: RoutingMetadata | undefined,
+	usedApiKeyHash: string | undefined,
+): RoutingMetadata | undefined {
+	if (!routingMetadata || !usedApiKeyHash) {
+		return routingMetadata;
+	}
+
+	if (routingMetadata.usedApiKeyHash === usedApiKeyHash) {
+		return routingMetadata;
+	}
+
+	return {
+		...routingMetadata,
+		usedApiKeyHash,
+	};
+}
+
+function buildRoutingAttempt(
+	provider: string,
+	model: string,
+	statusCode: number,
+	errorType: string,
+	succeeded: boolean,
+	options?: {
+		region?: string;
+		apiKeyHash?: string;
+	},
+): RoutingAttempt {
+	return {
+		provider,
+		model,
+		...(options?.region && { region: options.region }),
+		status_code: statusCode,
+		error_type: errorType,
+		succeeded,
+		...(options?.apiKeyHash && { apiKeyHash: options.apiKeyHash }),
+	};
+}
+
 function usesGoogleQueryToken(provider: string): boolean {
 	return (
 		provider === "google-ai-studio" ||
@@ -564,6 +605,8 @@ const completions = createRoute({
 										region: z.string().optional(),
 										status_code: z.number(),
 										error_type: z.string(),
+										succeeded: z.boolean().optional(),
+										apiKeyHash: z.string().optional(),
 									}),
 								)
 								.optional(),
@@ -2380,6 +2423,7 @@ chat.openapi(completions, async (c) => {
 
 	let providerKey: InferSelectModel<typeof tables.providerKey> | undefined;
 	let usedToken: string | undefined;
+	let usedApiKeyHash: string | undefined;
 	let configIndex = 0; // Index for round-robin environment variables
 	let envVarName: string | undefined; // Environment variable name for health tracking
 	if (
@@ -2678,6 +2722,9 @@ chat.openapi(completions, async (c) => {
 			message: `No token`,
 		});
 	}
+
+	usedApiKeyHash = getApiKeyFingerprint(usedToken);
+	routingMetadata = withUsedApiKeyHash(routingMetadata, usedApiKeyHash);
 
 	const contentFilterBlocked =
 		contentFilterMode === "enabled" &&
@@ -3602,6 +3649,7 @@ chat.openapi(completions, async (c) => {
 		usedModelMapping = ctx.usedModelMapping;
 		baseModelName = ctx.baseModelName;
 		usedToken = ctx.usedToken;
+		usedApiKeyHash = ctx.usedApiKeyHash;
 		providerKey = ctx.providerKey;
 		configIndex = ctx.configIndex;
 		envVarName = ctx.envVarName;
@@ -3618,6 +3666,7 @@ chat.openapi(completions, async (c) => {
 		frequency_penalty = ctx.frequency_penalty;
 		presence_penalty = ctx.presence_penalty;
 		usedRegion = ctx.usedRegion;
+		routingMetadata = withUsedApiKeyHash(routingMetadata, usedApiKeyHash);
 	}
 
 	async function tryResolveAlternateKeyForCurrentProvider(
@@ -4067,14 +4116,19 @@ chat.openapi(completions, async (c) => {
 							});
 
 							if (willRetryTimeout) {
-								routingAttempts.push({
-									provider: usedProvider,
-									model: baseModelName,
-									...(usedRegion && { region: usedRegion }),
-									status_code: 0,
-									error_type: getErrorType(0),
-									succeeded: false,
-								});
+								routingAttempts.push(
+									buildRoutingAttempt(
+										usedProvider,
+										baseModelName,
+										0,
+										getErrorType(0),
+										false,
+										{
+											region: usedRegion,
+											apiKeyHash: usedApiKeyHash,
+										},
+									),
+								);
 								failedProviderIds.add(
 									providerRetryKey(usedProvider, usedRegion),
 								);
@@ -4375,28 +4429,38 @@ chat.openapi(completions, async (c) => {
 							}
 
 							if (willRetrySameProvider && sameProviderRetryContext) {
-								routingAttempts.push({
-									provider: usedProvider,
-									model: baseModelName,
-									...(usedRegion && { region: usedRegion }),
-									status_code: 0,
-									error_type: getErrorType(0),
-									succeeded: false,
-								});
+								routingAttempts.push(
+									buildRoutingAttempt(
+										usedProvider,
+										baseModelName,
+										0,
+										getErrorType(0),
+										false,
+										{
+											region: usedRegion,
+											apiKeyHash: usedApiKeyHash,
+										},
+									),
+								);
 								applyResolvedProviderContext(sameProviderRetryContext);
 								retryAttempt--;
 								continue;
 							}
 
 							if (willRetryFetch) {
-								routingAttempts.push({
-									provider: usedProvider,
-									model: baseModelName,
-									...(usedRegion && { region: usedRegion }),
-									status_code: 0,
-									error_type: getErrorType(0),
-									succeeded: false,
-								});
+								routingAttempts.push(
+									buildRoutingAttempt(
+										usedProvider,
+										baseModelName,
+										0,
+										getErrorType(0),
+										false,
+										{
+											region: usedRegion,
+											apiKeyHash: usedApiKeyHash,
+										},
+									),
+								);
 								failedProviderIds.add(
 									providerRetryKey(usedProvider, usedRegion),
 								);
@@ -4601,28 +4665,38 @@ chat.openapi(completions, async (c) => {
 						}
 
 						if (willRetrySameProvider && sameProviderRetryContext) {
-							routingAttempts.push({
-								provider: usedProvider,
-								model: baseModelName,
-								...(usedRegion && { region: usedRegion }),
-								status_code: res.status,
-								error_type: getErrorType(res.status),
-								succeeded: false,
-							});
+							routingAttempts.push(
+								buildRoutingAttempt(
+									usedProvider,
+									baseModelName,
+									res.status,
+									getErrorType(res.status),
+									false,
+									{
+										region: usedRegion,
+										apiKeyHash: usedApiKeyHash,
+									},
+								),
+							);
 							applyResolvedProviderContext(sameProviderRetryContext);
 							retryAttempt--;
 							continue;
 						}
 
 						if (willRetryHttpError) {
-							routingAttempts.push({
-								provider: usedProvider,
-								model: baseModelName,
-								...(usedRegion && { region: usedRegion }),
-								status_code: res.status,
-								error_type: getErrorType(res.status),
-								succeeded: false,
-							});
+							routingAttempts.push(
+								buildRoutingAttempt(
+									usedProvider,
+									baseModelName,
+									res.status,
+									getErrorType(res.status),
+									false,
+									{
+										region: usedRegion,
+										apiKeyHash: usedApiKeyHash,
+									},
+								),
+							);
 							failedProviderIds.add(providerRetryKey(usedProvider, usedRegion));
 							continue;
 						}
@@ -4694,14 +4768,19 @@ chat.openapi(completions, async (c) => {
 
 				// Add the final attempt (successful or last failed) to routing
 				if (res && res.ok && usedProvider) {
-					routingAttempts.push({
-						provider: usedProvider,
-						model: baseModelName,
-						...(usedRegion && { region: usedRegion }),
-						status_code: res.status,
-						error_type: "none",
-						succeeded: true,
-					});
+					routingAttempts.push(
+						buildRoutingAttempt(
+							usedProvider,
+							baseModelName,
+							res.status,
+							"none",
+							true,
+							{
+								region: usedRegion,
+								apiKeyHash: usedApiKeyHash,
+							},
+						),
+					);
 				}
 
 				// Update routingMetadata with all routing attempts for DB logging
@@ -7245,28 +7324,38 @@ chat.openapi(completions, async (c) => {
 			}
 
 			if (willRetrySameProvider && sameProviderRetryContext) {
-				routingAttempts.push({
-					provider: usedProvider,
-					model: baseModelName,
-					...(usedRegion && { region: usedRegion }),
-					status_code: 0,
-					error_type: getErrorType(0),
-					succeeded: false,
-				});
+				routingAttempts.push(
+					buildRoutingAttempt(
+						usedProvider,
+						baseModelName,
+						0,
+						getErrorType(0),
+						false,
+						{
+							region: usedRegion,
+							apiKeyHash: usedApiKeyHash,
+						},
+					),
+				);
 				applyResolvedProviderContext(sameProviderRetryContext);
 				retryAttempt--;
 				continue;
 			}
 
 			if (willRetryFetchNonStreaming) {
-				routingAttempts.push({
-					provider: usedProvider,
-					model: baseModelName,
-					...(usedRegion && { region: usedRegion }),
-					status_code: 0,
-					error_type: getErrorType(0),
-					succeeded: false,
-				});
+				routingAttempts.push(
+					buildRoutingAttempt(
+						usedProvider,
+						baseModelName,
+						0,
+						getErrorType(0),
+						false,
+						{
+							region: usedRegion,
+							apiKeyHash: usedApiKeyHash,
+						},
+					),
+				);
 				failedProviderIds.add(providerRetryKey(usedProvider, usedRegion));
 				continue;
 			}
@@ -7715,28 +7804,38 @@ chat.openapi(completions, async (c) => {
 			}
 
 			if (willRetrySameProvider && sameProviderRetryContext) {
-				routingAttempts.push({
-					provider: usedProvider,
-					model: baseModelName,
-					...(usedRegion && { region: usedRegion }),
-					status_code: res.status,
-					error_type: getErrorType(res.status),
-					succeeded: false,
-				});
+				routingAttempts.push(
+					buildRoutingAttempt(
+						usedProvider,
+						baseModelName,
+						res.status,
+						getErrorType(res.status),
+						false,
+						{
+							region: usedRegion,
+							apiKeyHash: usedApiKeyHash,
+						},
+					),
+				);
 				applyResolvedProviderContext(sameProviderRetryContext);
 				retryAttempt--;
 				continue;
 			}
 
 			if (willRetryHttpNonStreaming) {
-				routingAttempts.push({
-					provider: usedProvider,
-					model: baseModelName,
-					...(usedRegion && { region: usedRegion }),
-					status_code: res.status,
-					error_type: getErrorType(res.status),
-					succeeded: false,
-				});
+				routingAttempts.push(
+					buildRoutingAttempt(
+						usedProvider,
+						baseModelName,
+						res.status,
+						getErrorType(res.status),
+						false,
+						{
+							region: usedRegion,
+							apiKeyHash: usedApiKeyHash,
+						},
+					),
+				);
 				failedProviderIds.add(providerRetryKey(usedProvider, usedRegion));
 				continue;
 			}
@@ -7809,14 +7908,19 @@ chat.openapi(completions, async (c) => {
 
 	// Add the final attempt (successful or last failed) to routing
 	if (res && res.ok && usedProvider) {
-		routingAttempts.push({
-			provider: usedProvider,
-			model: baseModelName,
-			...(usedRegion && { region: usedRegion }),
-			status_code: res.status,
-			error_type: "none",
-			succeeded: true,
-		});
+		routingAttempts.push(
+			buildRoutingAttempt(
+				usedProvider,
+				baseModelName,
+				res.status,
+				"none",
+				true,
+				{
+					region: usedRegion,
+					apiKeyHash: usedApiKeyHash,
+				},
+			),
+		);
 	}
 
 	// Update routingMetadata with all routing attempts for DB logging

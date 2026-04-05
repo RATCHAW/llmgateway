@@ -1,5 +1,6 @@
 import { HTTPException } from "hono/http-exception";
 
+import { getApiKeyFingerprint } from "@/lib/api-key-fingerprint.js";
 import {
 	findCustomProviderKey,
 	findProviderKey,
@@ -37,6 +38,7 @@ export interface ProviderContext {
 	usedModelMapping: string;
 	baseModelName: string;
 	usedToken: string;
+	usedApiKeyHash: string;
 	providerKey: InferSelectModel<typeof tables.providerKey> | undefined;
 	configIndex: number;
 	envVarName: string | undefined;
@@ -261,6 +263,8 @@ export async function resolveProviderContext(
 		}
 	}
 
+	const usedApiKeyHash = getApiKeyFingerprint(usedToken);
+
 	// --- Check if model supports reasoning (from selected provider, not any) ---
 	const supportsReasoning = providerMappingForSelected?.reasoning === true;
 	const splitTaggedReasoning =
@@ -433,6 +437,7 @@ export async function resolveProviderContext(
 		usedModelMapping,
 		baseModelName,
 		usedToken,
+		usedApiKeyHash,
 		providerKey,
 		configIndex,
 		envVarName,

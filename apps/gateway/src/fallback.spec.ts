@@ -13,6 +13,7 @@ import { and, db, eq, tables, type Log } from "@llmgateway/db";
 import { getProviderDefinition } from "@llmgateway/models";
 
 import { app } from "./app.js";
+import { getApiKeyFingerprint } from "./lib/api-key-fingerprint.js";
 import {
 	startMockServer,
 	stopMockServer,
@@ -2025,6 +2026,10 @@ describe("fallback and error status code handling", () => {
 
 		test("non-streaming: retries another key for the same provider when X-No-Fallback is set", async () => {
 			await setupSingleProviderWithMultipleKeys("together.ai");
+			const primaryKeyHash = getApiKeyFingerprint("together.ai-primary-token");
+			const secondaryKeyHash = getApiKeyFingerprint(
+				"together.ai-secondary-token",
+			);
 
 			const res = await app.request("/v1/chat/completions", {
 				method: "POST",
@@ -2045,6 +2050,12 @@ describe("fallback and error status code handling", () => {
 			expect(json.metadata.used_provider).toBe("together.ai");
 			expect(json.metadata.routing).toBeDefined();
 			expect(json.metadata.routing).toHaveLength(2);
+			const jsonRoutingHashes = json.metadata.routing.map(
+				(attempt: { apiKeyHash?: string }) => attempt.apiKeyHash,
+			);
+			expect(new Set(jsonRoutingHashes)).toEqual(
+				new Set([primaryKeyHash, secondaryKeyHash]),
+			);
 			expect(json.metadata.routing[0]).toMatchObject({
 				provider: "together.ai",
 				status_code: 500,
@@ -2060,13 +2071,23 @@ describe("fallback and error status code handling", () => {
 				(l: Log) => l.finishReason === "stop" || !l.hasError,
 			);
 			expect(successLog?.routingMetadata?.noFallback).toBe(true);
+			expect(successLog?.routingMetadata?.usedApiKeyHash).toBe(
+				successLog?.routingMetadata?.routing?.[1]?.apiKeyHash,
+			);
 			expect(successLog?.routingMetadata?.routing).toHaveLength(2);
-			expect(successLog?.routingMetadata?.routing?.[0]?.provider).toBe(
-				"together.ai",
-			);
-			expect(successLog?.routingMetadata?.routing?.[1]?.provider).toBe(
-				"together.ai",
-			);
+			expect(
+				new Set(
+					successLog?.routingMetadata?.routing?.map(
+						(attempt) => attempt.apiKeyHash,
+					),
+				),
+			).toEqual(new Set([primaryKeyHash, secondaryKeyHash]));
+			expect(successLog?.routingMetadata?.routing?.[0]).toMatchObject({
+				provider: "together.ai",
+			});
+			expect(successLog?.routingMetadata?.routing?.[1]).toMatchObject({
+				provider: "together.ai",
+			});
 		});
 
 		test("streaming: retries on 500 and delivers response on fallback provider", async () => {

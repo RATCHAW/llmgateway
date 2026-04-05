@@ -209,6 +209,7 @@ export function LogDetailClient({
 		log.dataStorageCost !== null &&
 		log.dataStorageCost !== undefined &&
 		Number(log.dataStorageCost) > 0;
+	const isClientError = log.unifiedFinishReason === "client_error";
 
 	const throughput =
 		log.duration && log.totalTokens

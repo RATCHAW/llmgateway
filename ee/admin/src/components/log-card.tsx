@@ -99,6 +99,12 @@ function copyToClipboard(text: string) {
 	void navigator.clipboard.writeText(text);
 }
 
+function formatParamLabel(key: string) {
+	return key
+		.replace(/_/g, " ")
+		.replace(/\b\w/g, (letter: string) => letter.toUpperCase());
+}
+
 function renderParams(obj: Record<string, any>, depth = 0): React.ReactNode {
 	return Object.entries(obj).flatMap(([key, value]) => {
 		if (value === null || value === undefined) {
@@ -109,9 +115,7 @@ function renderParams(obj: Record<string, any>, depth = 0): React.ReactNode {
 			return renderParams(value, depth + 1);
 		}
 
-		const formattedKey = key
-			.replace(/_/g, " ")
-			.replace(/\b\w/g, (l) => l.toUpperCase());
+		const formattedKey = formatParamLabel(key);
 
 		return [
 			<div key={key} className="contents">
@@ -135,6 +139,14 @@ export function LogCard({ log }: { log: ProjectLogEntry }) {
 	const messages = log.messages as unknown | undefined;
 	const responseFormat = log.responseFormat as { type?: string } | undefined;
 	const params = log.params as Record<string, any> | undefined;
+	const imageConfig = params?.image_config as
+		| Record<string, unknown>
+		| undefined;
+	const additionalParams = params
+		? Object.fromEntries(
+				Object.entries(params).filter(([key]) => key !== "image_config"),
+			)
+		: undefined;
 	const customHeaders = log.customHeaders as Record<string, string> | undefined;
 	const retentionEnabled =
 		log.dataStorageCost !== null &&
@@ -907,6 +919,28 @@ export function LogCard({ log }: { log: ProjectLogEntry }) {
 										: "-"}
 								</span>
 							</div>
+							{imageConfig &&
+								Object.entries(imageConfig).map(([key, value]) => {
+									if (value === null || value === undefined) {
+										return null;
+									}
+
+									return (
+										<div
+											key={key}
+											className="flex items-center justify-between gap-2"
+										>
+											<span className="text-muted-foreground">
+												{formatParamLabel(key)}
+											</span>
+											<span>
+												{Array.isArray(value)
+													? value.join(", ")
+													: String(value)}
+											</span>
+										</div>
+									);
+								})}
 						</div>
 					</div>
 					{log.plugins && log.plugins.length > 0 && (
@@ -966,11 +1000,11 @@ export function LogCard({ log }: { log: ProjectLogEntry }) {
 							</div>
 						</div>
 					)}
-					{params && Object.keys(params).length > 0 && (
+					{additionalParams && Object.keys(additionalParams).length > 0 && (
 						<div className="space-y-2">
 							<h4 className="text-sm font-medium">Additional Parameters</h4>
 							<div className="grid grid-cols-2 gap-2 rounded-md border p-3 text-sm">
-								{renderParams(params)}
+								{renderParams(additionalParams)}
 							</div>
 						</div>
 					)}

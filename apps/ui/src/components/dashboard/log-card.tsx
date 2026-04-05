@@ -35,6 +35,12 @@ import {
 
 import type { Log } from "@llmgateway/db";
 
+function formatParamLabel(key: string) {
+	return key
+		.replace(/_/g, " ")
+		.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export function LogCard({
 	log,
 	orgId,
@@ -84,9 +90,7 @@ export function LogCard({
 			}
 
 			// Format the key for display
-			const formattedKey = key
-				.replace(/_/g, " ")
-				.replace(/\b\w/g, (l) => l.toUpperCase());
+			const formattedKey = formatParamLabel(key);
 
 			return [
 				<div key={key} className="contents">
@@ -96,6 +100,13 @@ export function LogCard({
 			];
 		});
 	};
+
+	const imageConfig = log.params?.image_config;
+	const additionalParams = log.params
+		? Object.fromEntries(
+				Object.entries(log.params).filter(([key]) => key !== "image_config"),
+			)
+		: undefined;
 
 	// Determine status icon and color based on error status or unified finish reason
 	let StatusIcon = CheckCircle2;
@@ -883,6 +894,28 @@ export function LogCard({
 											: "-"}
 									</span>
 								</div>
+								{imageConfig &&
+									Object.entries(imageConfig).map(([key, value]) => {
+										if (value === null || value === undefined) {
+											return null;
+										}
+
+										return (
+											<div
+												key={key}
+												className="flex items-center justify-between gap-2"
+											>
+												<span className="text-muted-foreground">
+													{formatParamLabel(key)}
+												</span>
+												<span>
+													{Array.isArray(value)
+														? value.join(", ")
+														: String(value)}
+												</span>
+											</div>
+										);
+									})}
 							</TooltipProvider>
 						</div>
 					</div>
@@ -942,11 +975,11 @@ export function LogCard({
 							</div>
 						</div>
 					)}
-					{log.params && Object.keys(log.params).length > 0 && (
+					{additionalParams && Object.keys(additionalParams).length > 0 && (
 						<div className="space-y-2">
 							<h4 className="text-sm font-medium">Additional Parameters</h4>
 							<div className="grid grid-cols-2 gap-2 rounded-md border p-3 text-sm">
-								{renderParams(log.params)}
+								{renderParams(additionalParams)}
 							</div>
 						</div>
 					)}

@@ -4,30 +4,199 @@ import { HTTPException } from "hono/http-exception";
 import {
 	buildBaseLogEntry,
 	type ChatCompletionLogState,
+	updateBaseLogOptions,
 } from "@/chat/tools/chat-log-context.js";
+import { extractCustomHeaders } from "@/chat/tools/extract-custom-headers.js";
+import { parseModelInput } from "@/chat/tools/parse-model-input.js";
+import { validateSource } from "@/chat/tools/validate-source.js";
+import { assertApiKeyWithinUsageLimits } from "@/lib/api-key-usage-limits.js";
+import { findApiKeyByToken, findProjectById } from "@/lib/cached-queries.js";
+import { parseApiToken } from "@/lib/extract-api-token.js";
 import { insertLog } from "@/lib/logs.js";
 
+import { shortid } from "@llmgateway/db";
 import { logger } from "@llmgateway/logger";
 
 import type { ServerTypes } from "@/vars.js";
 import type { LogInsertData } from "@llmgateway/db";
 import type { Context } from "hono";
 
-function getSynthesizedClientErrorLog(
-	baseLogEntry: ReturnType<typeof buildBaseLogEntry>,
+function getRequestId(c: Context<ServerTypes>): string {
+	return c.req.header("x-request-id") ?? shortid(40);
+}
+
+function getDebugMode(c: Context<ServerTypes>): boolean {
+	return (
+		c.req.header("x-debug") === "true" ||
+		process.env.FORCE_DEBUG_MODE === "true" ||
+		process.env.NODE_ENV !== "production"
+	);
+}
+
+function getSource(c: Context<ServerTypes>): string | undefined {
+	let source = validateSource(
+		c.req.header("x-source"),
+		c.req.header("HTTP-Referer"),
+	);
+	const userAgent = c.req.header("User-Agent");
+
+	if (!source && userAgent && /^claude-cli\/.+/.test(userAgent)) {
+		source = "claude.com/claude-code";
+	}
+
+	return source;
+}
+
+function getRawRequestDetails(rawRequest: unknown): {
+	messages: unknown[];
+	requestedModel: string;
+	requestedProvider?: string;
+	usedModelMapping?: string;
+	usedProvider: string;
+} {
+	const messages =
+		typeof rawRequest === "object" &&
+		rawRequest !== null &&
+		"messages" in rawRequest &&
+		Array.isArray(rawRequest.messages)
+			? rawRequest.messages
+			: [];
+
+	const requestedModel =
+		typeof rawRequest === "object" &&
+		rawRequest !== null &&
+		"model" in rawRequest &&
+		typeof rawRequest.model === "string"
+			? rawRequest.model
+			: "unknown";
+
+	if (requestedModel === "unknown") {
+		return {
+			messages,
+			requestedModel,
+			usedProvider: "llmgateway",
+		};
+	}
+
+	try {
+		const parsedModel = parseModelInput(requestedModel);
+		return {
+			messages,
+			requestedModel,
+			requestedProvider: parsedModel.requestedProvider,
+			usedModelMapping: parsedModel.requestedModel,
+			usedProvider: parsedModel.requestedProvider ?? "llmgateway",
+		};
+	} catch {
+		return {
+			messages,
+			requestedModel,
+			usedProvider: "llmgateway",
+		};
+	}
+}
+
+async function buildFallbackBaseLogEntry(
+	c: Context<ServerTypes>,
+	state: ChatCompletionLogState,
+): Promise<ReturnType<typeof buildBaseLogEntry> | null> {
+	const existingBaseLogEntry = buildBaseLogEntry(c);
+	if (existingBaseLogEntry) {
+		return existingBaseLogEntry;
+	}
+
+	const token = parseApiToken(c);
+	if (!token) {
+		return null;
+	}
+
+	const apiKey = await findApiKeyByToken(token);
+	if (!apiKey || apiKey.status !== "active") {
+		return null;
+	}
+
+	try {
+		assertApiKeyWithinUsageLimits(apiKey);
+	} catch {
+		return null;
+	}
+
+	const project = await findProjectById(apiKey.projectId);
+	if (!project || project.status === "deleted") {
+		return null;
+	}
+
+	const rawRequest = await state.rawRequestPreviewPromise?.catch(
+		() => undefined,
+	);
+	const rawRequestDetails = getRawRequestDetails(rawRequest);
+
+	updateBaseLogOptions(c, {
+		requestId: getRequestId(c),
+		project,
+		apiKey,
+		usedModel: rawRequestDetails.requestedModel,
+		usedModelMapping: rawRequestDetails.usedModelMapping,
+		usedProvider: rawRequestDetails.usedProvider,
+		requestedModel: rawRequestDetails.requestedModel,
+		requestedProvider: rawRequestDetails.requestedProvider,
+		messages: rawRequestDetails.messages,
+		customHeaders: extractCustomHeaders(c),
+		debugMode: getDebugMode(c),
+		userAgent: c.req.header("User-Agent") ?? undefined,
+		source: getSource(c),
+		rawRequest,
+	});
+
+	return buildBaseLogEntry(c);
+}
+
+async function getSynthesizedClientErrorDetails(
+	c: Context<ServerTypes>,
+	error: unknown,
+): Promise<{
+	responseText: string;
+	statusText: string;
+}> {
+	if (error instanceof HTTPException) {
+		return {
+			responseText: error.message,
+			statusText: error.res?.statusText ?? "Client Error",
+		};
+	}
+
+	try {
+		const responseText = await c.res.clone().text();
+		return {
+			responseText: responseText || "Client error",
+			statusText: c.res.statusText ?? "Client Error",
+		};
+	} catch {
+		return {
+			responseText: error instanceof Error ? error.message : "Client error",
+			statusText:
+				error instanceof Error
+					? error.name
+					: (c.res.statusText ?? "Client Error"),
+		};
+	}
+}
+
+async function getSynthesizedClientErrorLog(
+	c: Context<ServerTypes>,
+	state: ChatCompletionLogState,
 	status: number,
 	error: unknown,
-): LogInsertData | null {
+): Promise<LogInsertData | null> {
+	const baseLogEntry = await buildFallbackBaseLogEntry(c, state);
 	if (!baseLogEntry) {
 		return null;
 	}
 
-	const responseText =
-		error instanceof HTTPException
-			? error.message
-			: error instanceof Error
-				? error.message
-				: "Client error";
+	const { responseText, statusText } = await getSynthesizedClientErrorDetails(
+		c,
+		error,
+	);
 
 	return {
 		...baseLogEntry,
@@ -50,12 +219,7 @@ function getSynthesizedClientErrorLog(
 		canceled: false,
 		errorDetails: {
 			statusCode: status,
-			statusText:
-				error instanceof HTTPException
-					? "Client Error"
-					: error instanceof Error
-						? error.name
-						: "Client Error",
+			statusText,
 			responseText,
 		},
 		duration: 0,
@@ -106,8 +270,9 @@ async function flushChatCompletionLogs(
 			: c.res.status;
 
 	if (shouldSynthesizeClientError(status, state.pendingLogs)) {
-		const synthesizedLog = getSynthesizedClientErrorLog(
-			buildBaseLogEntry(c),
+		const synthesizedLog = await getSynthesizedClientErrorLog(
+			c,
+			state,
 			status,
 			state.caughtError,
 		);
@@ -147,6 +312,10 @@ export const chatCompletionLogMiddleware = createMiddleware<ServerTypes>(
 		const state: ChatCompletionLogState = {
 			pendingLogs: [],
 			clientErrorSynthesized: false,
+			rawRequestPreviewPromise: c.req.raw
+				.clone()
+				.json()
+				.catch(() => undefined),
 		};
 		c.set("chatCompletionLogState", state);
 

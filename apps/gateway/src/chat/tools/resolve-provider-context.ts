@@ -404,6 +404,7 @@ export async function resolveProviderContext(
 
 	// --- Headers ---
 	const headers = getProviderHeaders(usedProvider as Provider, usedToken, {
+		requestId: options.requestId,
 		webSearchEnabled: options.webSearchEnabled,
 	});
 	headers["Content-Type"] = "application/json";

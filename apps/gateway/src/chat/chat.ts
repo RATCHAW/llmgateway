@@ -3918,6 +3918,7 @@ chat.openapi(completions, async (c) => {
 
 					try {
 						const headers = getProviderHeaders(usedProvider, usedToken, {
+							requestId,
 							webSearchEnabled: !!webSearchTool,
 						});
 						headers["Content-Type"] = "application/json";
@@ -7051,6 +7052,7 @@ chat.openapi(completions, async (c) => {
 
 		try {
 			const headers = getProviderHeaders(usedProvider, usedToken, {
+				requestId,
 				webSearchEnabled: !!webSearchTool,
 			});
 			headers["Content-Type"] = "application/json";

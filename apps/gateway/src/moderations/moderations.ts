@@ -462,7 +462,7 @@ moderations.openapi(createModeration, async (c): Promise<any> => {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
-				...getProviderHeaders("openai", usedToken),
+				...getProviderHeaders("openai", usedToken, { requestId }),
 			},
 			body: JSON.stringify(requestBody),
 			signal: fetchSignal,

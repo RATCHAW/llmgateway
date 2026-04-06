@@ -69,6 +69,7 @@ interface RoutingMetadata {
 		status_code?: number;
 		error_type?: string;
 		apiKeyHash?: string;
+		logId?: string;
 	}>;
 }
 
@@ -651,6 +652,19 @@ export function LogCard({
 																			key {formatApiKeyHash(attempt.apiKeyHash)}
 																		</span>
 																	)}
+																	{attempt.logId &&
+																		(getDetailUrl ? (
+																			<LinkComponent
+																				href={getDetailUrl(attempt.logId)}
+																				className="text-muted-foreground hover:underline"
+																			>
+																				log {attempt.logId}
+																			</LinkComponent>
+																		) : (
+																			<span className="text-muted-foreground">
+																				log {attempt.logId}
+																			</span>
+																		))}
 																</span>
 																<span>
 																	{attempt.status_code}{" "}

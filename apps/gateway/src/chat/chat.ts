@@ -32,6 +32,7 @@ import {
 	providerRateLimitWindows,
 } from "@/lib/provider-rate-limit.js";
 import { getResponsesContext } from "@/lib/responses-context.js";
+import { parseCommaSeparatedEnv } from "@/lib/round-robin-env.js";
 import {
 	createCombinedSignal,
 	createStreamingCombinedSignal,
@@ -151,7 +152,10 @@ import { transformStreamingToOpenai } from "./tools/transform-streaming-to-opena
 import { validateFreeModelUsage } from "./tools/validate-free-model-usage.js";
 import { validateModelCapabilities } from "./tools/validate-model-capabilities.js";
 
-import type { OriginalRequestParams } from "./tools/resolve-provider-context.js";
+import type {
+	OriginalRequestParams,
+	ProviderContext,
+} from "./tools/resolve-provider-context.js";
 import type { ServerTypes } from "@/vars.js";
 
 /**
@@ -3325,6 +3329,102 @@ chat.openapi(completions, async (c) => {
 		presence_penalty,
 	};
 
+	const applyResolvedProviderContext = (ctx: ProviderContext) => {
+		usedProvider = ctx.usedProvider;
+		usedModel = ctx.usedModel;
+		usedModelFormatted = ctx.usedModelFormatted;
+		usedModelMapping = ctx.usedModelMapping;
+		baseModelName = ctx.baseModelName;
+		usedToken = ctx.usedToken;
+		providerKey = ctx.providerKey;
+		configIndex = ctx.configIndex;
+		envVarName = ctx.envVarName;
+		url = ctx.url;
+		requestBody = ctx.requestBody;
+		useResponsesApi = ctx.useResponsesApi;
+		requestCanBeCanceled = ctx.requestCanBeCanceled;
+		isImageGeneration = ctx.isImageGeneration;
+		supportsReasoning = ctx.supportsReasoning;
+		splitTaggedReasoning = ctx.splitTaggedReasoning ?? false;
+		temperature = ctx.temperature;
+		max_tokens = ctx.max_tokens;
+		top_p = ctx.top_p;
+		frequency_penalty = ctx.frequency_penalty;
+		presence_penalty = ctx.presence_penalty;
+		usedRegion = ctx.usedRegion;
+	};
+
+	const tryResolveAlternateEnvKeyForCurrentProvider =
+		async (): Promise<ProviderContext | null> => {
+			if (providerKey || !envVarName || !usedProvider || !usedModel) {
+				return null;
+			}
+
+			const envValue = process.env[envVarName];
+			if (!envValue || parseCommaSeparatedEnv(envValue).length < 2) {
+				return null;
+			}
+
+			const currentConfigIndex = configIndex;
+			const currentToken = usedToken;
+
+			try {
+				const alternateContext = await resolveProviderContext(
+					{
+						providerId: usedProvider,
+						modelName: usedModel,
+						...(usedRegion && { region: usedRegion }),
+					},
+					{
+						mode: project.mode,
+						organizationId: project.organizationId,
+					},
+					{
+						id: organization.id,
+						credits: organization.credits,
+						devPlan: organization.devPlan,
+						devPlanCreditsLimit: organization.devPlanCreditsLimit,
+						devPlanCreditsUsed: organization.devPlanCreditsUsed,
+						devPlanExpiresAt: organization.devPlanExpiresAt,
+					},
+					modelInfo,
+					originalRequestParams,
+					{
+						requestId,
+						stream: !!stream,
+						effectiveStream,
+						messages: messages as BaseMessage[],
+						response_format,
+						tools,
+						tool_choice,
+						reasoning_effort,
+						reasoning_max_tokens,
+						effort,
+						webSearchTool,
+						image_config,
+						sensitive_word_check,
+						maxImageSizeMB,
+						userPlan,
+						hasExistingToolCalls,
+						customProviderName,
+						webSearchEnabled: !!webSearchTool,
+					},
+				);
+
+				if (
+					alternateContext.providerKey ||
+					(alternateContext.configIndex === currentConfigIndex &&
+						alternateContext.usedToken === currentToken)
+				) {
+					return null;
+				}
+
+				return alternateContext;
+			} catch {
+				return null;
+			}
+		};
+
 	// Strip unsupported parameters based on model's supportedParameters
 	if (finalModelInfo) {
 		const providerMapping = finalModelInfo.providers.find(
@@ -3781,28 +3881,7 @@ chat.openapi(completions, async (c) => {
 									webSearchEnabled: !!webSearchTool,
 								},
 							);
-							usedProvider = ctx.usedProvider;
-							usedModel = ctx.usedModel;
-							usedModelFormatted = ctx.usedModelFormatted;
-							usedModelMapping = ctx.usedModelMapping;
-							baseModelName = ctx.baseModelName;
-							usedToken = ctx.usedToken;
-							providerKey = ctx.providerKey;
-							configIndex = ctx.configIndex;
-							envVarName = ctx.envVarName;
-							url = ctx.url;
-							requestBody = ctx.requestBody;
-							useResponsesApi = ctx.useResponsesApi;
-							requestCanBeCanceled = ctx.requestCanBeCanceled;
-							isImageGeneration = ctx.isImageGeneration;
-							supportsReasoning = ctx.supportsReasoning;
-							splitTaggedReasoning = ctx.splitTaggedReasoning ?? false;
-							temperature = ctx.temperature;
-							max_tokens = ctx.max_tokens;
-							top_p = ctx.top_p;
-							frequency_penalty = ctx.frequency_penalty;
-							presence_penalty = ctx.presence_penalty;
-							usedRegion = ctx.usedRegion;
+							applyResolvedProviderContext(ctx);
 						} catch {
 							failedProviderIds.add(
 								providerRetryKey(nextProvider.providerId, nextProvider.region),
@@ -4329,8 +4408,27 @@ chat.openapi(completions, async (c) => {
 						// Extract plugin IDs for logging
 						const streamingErrorPluginIds = plugins?.map((p) => p.id) ?? [];
 
-						// Check if we should retry before logging so we can mark the log as retried
-						const willRetryHttpError = shouldRetryRequest({
+						let alternateProviderContext: ProviderContext | null = null;
+						let reportedKeyError = false;
+						if (envVarName !== undefined && finishReason !== "content_filter") {
+							reportKeyError(
+								envVarName,
+								configIndex,
+								res.status,
+								errorResponseText,
+							);
+							reportedKeyError = true;
+
+							if (
+								providerKey === undefined &&
+								(res.status === 401 || res.status === 403)
+							) {
+								alternateProviderContext =
+									await tryResolveAlternateEnvKeyForCurrentProvider();
+							}
+						}
+
+						const willRetryProviderFallback = shouldRetryRequest({
 							requestedProvider,
 							noFallback,
 							statusCode: res.status,
@@ -4341,6 +4439,8 @@ chat.openapi(completions, async (c) => {
 								1,
 							usedProvider,
 						});
+						const willRetryHttpError =
+							alternateProviderContext !== null || willRetryProviderFallback;
 
 						const baseLogEntry = createLogEntry(
 							requestId,
@@ -4432,7 +4532,11 @@ chat.openapi(completions, async (c) => {
 
 						// Report key health for environment-based tokens
 						// Don't report content_filter as a key error - it's intentional provider behavior
-						if (envVarName !== undefined && finishReason !== "content_filter") {
+						if (
+							!reportedKeyError &&
+							envVarName !== undefined &&
+							finishReason !== "content_filter"
+						) {
 							reportKeyError(
 								envVarName,
 								configIndex,
@@ -4441,7 +4545,20 @@ chat.openapi(completions, async (c) => {
 							);
 						}
 
-						if (willRetryHttpError) {
+						if (alternateProviderContext) {
+							routingAttempts.push({
+								provider: usedProvider,
+								model: baseModelName,
+								...(usedRegion && { region: usedRegion }),
+								status_code: res.status,
+								error_type: getErrorType(res.status),
+								succeeded: false,
+							});
+							applyResolvedProviderContext(alternateProviderContext);
+							continue;
+						}
+
+						if (willRetryProviderFallback) {
 							routingAttempts.push({
 								provider: usedProvider,
 								model: baseModelName,
@@ -6882,28 +6999,7 @@ chat.openapi(completions, async (c) => {
 						webSearchEnabled: !!webSearchTool,
 					},
 				);
-				usedProvider = ctx.usedProvider;
-				usedModel = ctx.usedModel;
-				usedModelFormatted = ctx.usedModelFormatted;
-				usedModelMapping = ctx.usedModelMapping;
-				baseModelName = ctx.baseModelName;
-				usedToken = ctx.usedToken;
-				providerKey = ctx.providerKey;
-				configIndex = ctx.configIndex;
-				envVarName = ctx.envVarName;
-				url = ctx.url;
-				requestBody = ctx.requestBody;
-				useResponsesApi = ctx.useResponsesApi;
-				requestCanBeCanceled = ctx.requestCanBeCanceled;
-				isImageGeneration = ctx.isImageGeneration;
-				supportsReasoning = ctx.supportsReasoning;
-				splitTaggedReasoning = ctx.splitTaggedReasoning ?? false;
-				temperature = ctx.temperature;
-				max_tokens = ctx.max_tokens;
-				top_p = ctx.top_p;
-				frequency_penalty = ctx.frequency_penalty;
-				presence_penalty = ctx.presence_penalty;
-				usedRegion = ctx.usedRegion;
+				applyResolvedProviderContext(ctx);
 			} catch {
 				failedProviderIds.add(
 					providerRetryKey(nextProvider.providerId, nextProvider.region),
@@ -7418,8 +7514,22 @@ chat.openapi(completions, async (c) => {
 			// Extract plugin IDs for logging
 			const providerErrorPluginIds = plugins?.map((p) => p.id) ?? [];
 
-			// Check if we should retry before logging so we can mark the log as retried
-			const willRetryHttpNonStreaming = shouldRetryRequest({
+			let alternateProviderContext: ProviderContext | null = null;
+			let reportedKeyError = false;
+			if (envVarName !== undefined && finishReason !== "content_filter") {
+				reportKeyError(envVarName, configIndex, res.status, errorResponseText);
+				reportedKeyError = true;
+
+				if (
+					providerKey === undefined &&
+					(res.status === 401 || res.status === 403)
+				) {
+					alternateProviderContext =
+						await tryResolveAlternateEnvKeyForCurrentProvider();
+				}
+			}
+
+			const willRetryProviderFallback = shouldRetryRequest({
 				requestedProvider,
 				noFallback,
 				statusCode: res.status,
@@ -7430,6 +7540,8 @@ chat.openapi(completions, async (c) => {
 					1,
 				usedProvider,
 			});
+			const willRetryHttpNonStreaming =
+				alternateProviderContext !== null || willRetryProviderFallback;
 
 			const baseLogEntry = createLogEntry(
 				requestId,
@@ -7527,11 +7639,28 @@ chat.openapi(completions, async (c) => {
 
 			// Report key health for environment-based tokens
 			// Don't report content_filter as a key error - it's intentional provider behavior
-			if (envVarName !== undefined && finishReason !== "content_filter") {
+			if (
+				!reportedKeyError &&
+				envVarName !== undefined &&
+				finishReason !== "content_filter"
+			) {
 				reportKeyError(envVarName, configIndex, res.status, errorResponseText);
 			}
 
-			if (willRetryHttpNonStreaming) {
+			if (alternateProviderContext) {
+				routingAttempts.push({
+					provider: usedProvider,
+					model: baseModelName,
+					...(usedRegion && { region: usedRegion }),
+					status_code: res.status,
+					error_type: getErrorType(res.status),
+					succeeded: false,
+				});
+				applyResolvedProviderContext(alternateProviderContext);
+				continue;
+			}
+
+			if (willRetryProviderFallback) {
 				routingAttempts.push({
 					provider: usedProvider,
 					model: baseModelName,

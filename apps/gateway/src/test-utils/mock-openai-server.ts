@@ -726,6 +726,31 @@ mockOpenAIServer.post("/v1/responses", async (c) => {
 mockOpenAIServer.post("/v1/chat/completions", async (c) => {
 	const body = await c.req.json();
 	const chatMessages = getMockChatMessages(body.messages);
+	const authorization = c.req.header("authorization") ?? "";
+
+	if (authorization.includes("sk-invalid-auth-key")) {
+		c.status(401);
+		return c.json({
+			error: {
+				message: "Incorrect API key provided.",
+				type: "authentication_error",
+				param: null,
+				code: "invalid_api_key",
+			},
+		});
+	}
+
+	if (authorization.includes("sk-forbidden-auth-key")) {
+		c.status(403);
+		return c.json({
+			error: {
+				message: "You do not have access to this resource.",
+				type: "permission_error",
+				param: null,
+				code: "forbidden",
+			},
+		});
+	}
 
 	// Check if this request should trigger an error response
 	const shouldError = hasUserMessageTrigger(chatMessages, "TRIGGER_ERROR");
@@ -1772,6 +1797,30 @@ mockOpenAIServer.post(
 
 // Handle Google AI Studio generateContent endpoint (Gemini models)
 mockOpenAIServer.post("/v1beta/models/:model\\:generateContent", async (c) => {
+	const authorization = c.req.header("authorization") ?? "";
+	if (authorization.includes("sk-invalid-auth-key")) {
+		c.status(401);
+		return c.json({
+			error: {
+				message: "Incorrect API key provided.",
+				type: "authentication_error",
+				param: null,
+				code: "invalid_api_key",
+			},
+		});
+	}
+	if (authorization.includes("sk-forbidden-auth-key")) {
+		c.status(403);
+		return c.json({
+			error: {
+				message: "You do not have access to this resource.",
+				type: "permission_error",
+				param: null,
+				code: "forbidden",
+			},
+		});
+	}
+
 	const body = await c.req.json();
 
 	// Check if this request should trigger an error response

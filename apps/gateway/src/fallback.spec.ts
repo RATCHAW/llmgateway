@@ -13,6 +13,8 @@ import { and, db, eq, tables, type Log } from "@llmgateway/db";
 import { getProviderDefinition } from "@llmgateway/models";
 
 import { app } from "./app.js";
+import { resetKeyHealth } from "./lib/api-key-health.js";
+import { resetRoundRobinCounters } from "./lib/round-robin-env.js";
 import {
 	startMockServer,
 	stopMockServer,
@@ -22,6 +24,8 @@ import { clearCache, waitForLogs, readAll } from "./test-utils/test-helpers.js";
 
 describe("fallback and error status code handling", () => {
 	let mockServerUrl: string;
+	const originalObsidianApiKey = process.env.LLM_OBSIDIAN_API_KEY;
+	const originalObsidianBaseUrl = process.env.LLM_OBSIDIAN_BASE_URL;
 
 	async function ensureBaseFixtures() {
 		await db
@@ -126,6 +130,8 @@ describe("fallback and error status code handling", () => {
 	});
 
 	beforeEach(async () => {
+		resetRoundRobinCounters();
+		resetKeyHealth();
 		await resetTestState();
 	});
 
@@ -134,6 +140,18 @@ describe("fallback and error status code handling", () => {
 	});
 
 	afterEach(async () => {
+		if (originalObsidianApiKey === undefined) {
+			delete process.env.LLM_OBSIDIAN_API_KEY;
+		} else {
+			process.env.LLM_OBSIDIAN_API_KEY = originalObsidianApiKey;
+		}
+		if (originalObsidianBaseUrl === undefined) {
+			delete process.env.LLM_OBSIDIAN_BASE_URL;
+		} else {
+			process.env.LLM_OBSIDIAN_BASE_URL = originalObsidianBaseUrl;
+		}
+		resetRoundRobinCounters();
+		resetKeyHealth();
 		await resetTestState();
 	});
 
@@ -206,6 +224,25 @@ describe("fallback and error status code handling", () => {
 				baseUrl: mockServerUrl,
 			},
 		]);
+	}
+
+	async function setupCreditsProjectWithGatewayKey() {
+		await ensureBaseFixtures();
+
+		await db
+			.update(tables.project)
+			.set({
+				mode: "credits",
+			})
+			.where(eq(tables.project.id, "project-id"));
+
+		await db.insert(tables.apiKey).values({
+			id: "token-id",
+			token: "real-token",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
 	}
 
 	async function setRoutingMetrics(
@@ -1926,6 +1963,53 @@ describe("fallback and error status code handling", () => {
 			const log = logs[0];
 			expect(log.finishReason).toBe("gateway_error");
 			expect(log.hasError).toBe(true);
+		});
+
+		test("non-streaming: retries another env key for same provider on 401", async () => {
+			await setupCreditsProjectWithGatewayKey();
+			process.env.LLM_OBSIDIAN_API_KEY =
+				"sk-invalid-auth-key,sk-valid-auth-key";
+			process.env.LLM_OBSIDIAN_BASE_URL = mockServerUrl;
+
+			const res = await app.request("/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: "Bearer real-token",
+					"X-No-Fallback": "true",
+				},
+				body: JSON.stringify({
+					model: "obsidian/gemini-2.5-flash-image",
+					messages: [{ role: "user", content: "hello alternate env key" }],
+				}),
+			});
+
+			expect(res.status).toBe(200);
+			const json = await res.json();
+			expect(json.choices[0].message.content).toContain(
+				"hello alternate env key",
+			);
+
+			const logs = await waitForLogs(2);
+			expect(logs.length).toBeGreaterThanOrEqual(2);
+
+			const successLog = logs.find((l: Log) => !l.hasError);
+			const failedLog = logs.find((l: Log) => l.hasError);
+			expect(successLog).toBeDefined();
+			expect(failedLog).toBeDefined();
+			expect(failedLog!.finishReason).toBe("gateway_error");
+			expect(failedLog!.retried).toBe(true);
+			expect(successLog!.routingMetadata?.routing).toBeDefined();
+			expect(successLog!.routingMetadata!.routing).toHaveLength(2);
+			expect(successLog!.routingMetadata!.routing![0]).toMatchObject({
+				provider: "obsidian",
+				status_code: 401,
+				succeeded: false,
+			});
+			expect(successLog!.routingMetadata!.routing![1]).toMatchObject({
+				provider: "obsidian",
+				succeeded: true,
+			});
 		});
 
 		test("non-streaming: does not retry when specific provider is requested", async () => {

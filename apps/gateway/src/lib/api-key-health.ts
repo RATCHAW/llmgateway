@@ -1,3 +1,5 @@
+import { hasInvalidProviderCredentialError } from "./provider-auth-errors.js";
+
 /**
  * In-memory API key health tracking for uptime-aware routing
  * Tracks historical error rates per API key using a sliding window approach
@@ -76,13 +78,6 @@ const PERMANENT_ERROR_CODES = [401, 403];
  * end-user request problems.
  */
 const UPTIME_RELEVANT_4XX_CODES = new Set([...PERMANENT_ERROR_CODES, 404, 429]);
-
-/**
- * Error messages that indicate permanent key issues
- */
-const PERMANENT_ERROR_MESSAGES = [
-	"API Key not found. Please pass a valid API key.",
-];
 
 /**
  * Uptime threshold below which exponential penalty kicks in
@@ -360,9 +355,7 @@ export function reportKeyError(
 		keyHealthMap.set(healthKey, health);
 	}
 
-	const isPermanentErrorMessage =
-		errorText !== undefined &&
-		PERMANENT_ERROR_MESSAGES.some((msg) => errorText.includes(msg));
+	const isPermanentErrorMessage = hasInvalidProviderCredentialError(errorText);
 
 	// Most upstream 4xx responses are client-side request issues and should not
 	// degrade provider uptime or influence routing decisions.
@@ -422,9 +415,7 @@ export function reportTrackedKeyError(
 		keyHealthMap.set(healthKey, health);
 	}
 
-	const isPermanentErrorMessage =
-		errorText !== undefined &&
-		PERMANENT_ERROR_MESSAGES.some((msg) => errorText.includes(msg));
+	const isPermanentErrorMessage = hasInvalidProviderCredentialError(errorText);
 
 	if (
 		statusCode !== undefined &&

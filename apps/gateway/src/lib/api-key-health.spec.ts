@@ -161,6 +161,22 @@ describe("api-key-health", () => {
 				permanentlyBlacklisted: true,
 			});
 		});
+
+		it("should permanently blacklist ignored 4xx with invalid key text", () => {
+			reportKeyError(
+				"LLM_OPENAI_API_KEY",
+				0,
+				400,
+				"API key not valid. Please pass a valid API key.",
+			);
+
+			expect(getKeyMetrics("LLM_OPENAI_API_KEY", 0)).toMatchObject({
+				uptime: 0,
+				totalRequests: 1,
+				consecutiveErrors: 0,
+				permanentlyBlacklisted: true,
+			});
+		});
 	});
 
 	describe("getKeyHealth", () => {

@@ -768,6 +768,23 @@ mockOpenAIServer.post("/v1/chat/completions", async (c) => {
 	}
 
 	// Check if this request should fail on the first attempt but succeed on retry
+	if (userMessage.includes("TRIGGER_FAIL_ONCE_INVALID_KEY")) {
+		failOnceCounter++;
+		if (failOnceCounter === 1) {
+			c.status(400);
+			return c.json({
+				error: {
+					message: "API key not valid. Please pass a valid API key.",
+					type: "authentication_error",
+					param: null,
+					code: "invalid_api_key",
+				},
+			});
+		}
+		// Subsequent requests succeed - fall through to normal response
+	}
+
+	// Check if this request should fail on the first attempt but succeed on retry
 	if (userMessage.includes("TRIGGER_FAIL_ONCE")) {
 		failOnceCounter++;
 		if (failOnceCounter === 1) {

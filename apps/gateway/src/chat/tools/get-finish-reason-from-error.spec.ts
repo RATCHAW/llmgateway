@@ -112,6 +112,15 @@ describe("getFinishReasonFromError", () => {
 		expect(getFinishReasonFromError(403)).toBe("gateway_error");
 	});
 
+	it("returns gateway_error for 400 invalid API key payloads", () => {
+		expect(
+			getFinishReasonFromError(
+				400,
+				'{"error":{"message":"API key not valid. Please pass a valid API key.","type":"authentication_error","code":"invalid_api_key"}}',
+			),
+		).toBe("gateway_error");
+	});
+
 	it("returns client_error when no error text provided for other 4xx", () => {
 		expect(getFinishReasonFromError(400)).toBe("client_error");
 		expect(getFinishReasonFromError(422)).toBe("client_error");

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { transformResponseToOpenai } from "./transform-response-to-openai.js";
+import {
+	transformResponseToOpenai,
+	stripRequestScopedMetadataFromOpenAiResponse,
+	withCurrentRequestMetadataOnOpenAiResponse,
+} from "./transform-response-to-openai.js";
 
 describe("transformResponseToOpenai", () => {
 	test("includes request_id in response metadata", () => {
@@ -55,6 +59,72 @@ describe("transformResponseToOpenai", () => {
 			used_model: "gpt-4o-mini",
 			used_provider: "openai",
 			underlying_used_model: "gpt-4o-mini",
+		});
+	});
+
+	test("strips request-scoped metadata before caching", () => {
+		const response = stripRequestScopedMetadataFromOpenAiResponse({
+			metadata: {
+				request_id: "req_old",
+				routing: [
+					{
+						provider: "openai",
+						model: "gpt-4o-mini",
+						status_code: 500,
+						error_type: "upstream_error",
+						succeeded: false,
+						apiKeyHash: "hash-a",
+						logId: "log-a",
+					},
+				],
+			},
+		});
+
+		expect(response.metadata).toEqual({
+			routing: [
+				{
+					provider: "openai",
+					model: "gpt-4o-mini",
+					status_code: 500,
+					error_type: "upstream_error",
+					succeeded: false,
+				},
+			],
+		});
+	});
+
+	test("applies the current request id to cached responses", () => {
+		const response = withCurrentRequestMetadataOnOpenAiResponse(
+			{
+				metadata: {
+					request_id: "req_old",
+					routing: [
+						{
+							provider: "openai",
+							model: "gpt-4o-mini",
+							status_code: 500,
+							error_type: "upstream_error",
+							succeeded: false,
+							apiKeyHash: "hash-a",
+							logId: "log-a",
+						},
+					],
+				},
+			},
+			"req_new",
+		);
+
+		expect(response.metadata).toEqual({
+			request_id: "req_new",
+			routing: [
+				{
+					provider: "openai",
+					model: "gpt-4o-mini",
+					status_code: 500,
+					error_type: "upstream_error",
+					succeeded: false,
+				},
+			],
 		});
 	});
 });

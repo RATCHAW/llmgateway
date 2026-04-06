@@ -35,6 +35,67 @@ function buildMetadata(
 	};
 }
 
+function sanitizeRoutingAttempts(
+	routing: RoutingAttempt[] | null | undefined,
+): RoutingAttempt[] | undefined {
+	if (!routing) {
+		return undefined;
+	}
+
+	return routing.map(
+		({ apiKeyHash: _apiKeyHash, logId: _logId, ...attempt }) => ({
+			...attempt,
+		}),
+	);
+}
+
+export function stripRequestScopedMetadataFromOpenAiResponse<
+	T extends {
+		metadata?: Record<string, unknown> | null;
+	},
+>(response: T): T {
+	const metadata = response.metadata;
+	if (!metadata || typeof metadata !== "object") {
+		return response;
+	}
+
+	const nextMetadata = { ...metadata };
+	delete nextMetadata.request_id;
+
+	if (Array.isArray(metadata.routing)) {
+		nextMetadata.routing = sanitizeRoutingAttempts(
+			metadata.routing as RoutingAttempt[],
+		);
+	}
+
+	return {
+		...response,
+		metadata: nextMetadata,
+	};
+}
+
+export function withCurrentRequestMetadataOnOpenAiResponse<
+	T extends {
+		metadata?: Record<string, unknown> | null;
+	},
+>(response: T, requestId: string): T {
+	const sanitizedResponse =
+		stripRequestScopedMetadataFromOpenAiResponse(response);
+	const metadata = sanitizedResponse.metadata;
+
+	if (!metadata || typeof metadata !== "object") {
+		return sanitizedResponse;
+	}
+
+	return {
+		...sanitizedResponse,
+		metadata: {
+			...metadata,
+			request_id: requestId,
+		},
+	};
+}
+
 /**
  * Helper function to build usage object with optional cost fields
  */

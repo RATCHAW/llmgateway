@@ -80,6 +80,21 @@ describe("getProviderEndpoint", () => {
 		);
 	});
 
+	it("uses the first AI Studio base URL when multiple values are configured without a config slot", () => {
+		process.env.LLM_GOOGLE_AI_STUDIO_BASE_URL =
+			"https://studio-1.example, https://studio-2.example";
+
+		const endpoint = getProviderEndpoint(
+			"google-ai-studio",
+			undefined,
+			"gemini-2.5-flash",
+		);
+
+		expect(endpoint).toBe(
+			"https://studio-1.example/v1beta/models/gemini-2.5-flash:generateContent",
+		);
+	});
+
 	it("uses the indexed AI Studio base URL for the selected config slot", () => {
 		process.env.LLM_GOOGLE_AI_STUDIO_BASE_URL =
 			"https://studio-1.example, https://studio-2.example, https://studio-3.example";
@@ -112,6 +127,23 @@ describe("getProviderEndpoint", () => {
 
 		expect(endpoint).toBe(
 			"https://vertex-override.example/v1/publishers/google/models/gemini-2.5-flash-lite:generateContent",
+		);
+	});
+
+	it("uses the first Vertex base URL when multiple values are configured without a config slot", () => {
+		process.env.LLM_GOOGLE_VERTEX_BASE_URL =
+			"https://vertex-1.example, https://vertex-2.example";
+		process.env.LLM_GOOGLE_CLOUD_PROJECT = "project-a, project-b";
+		process.env.LLM_GOOGLE_VERTEX_REGION = "global, us-central1";
+
+		const endpoint = getProviderEndpoint(
+			"google-vertex",
+			undefined,
+			"gemini-2.5-pro",
+		);
+
+		expect(endpoint).toBe(
+			"https://vertex-1.example/v1/projects/project-a/locations/global/publishers/google/models/gemini-2.5-pro:generateContent",
 		);
 	});
 

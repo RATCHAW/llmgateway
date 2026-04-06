@@ -25,14 +25,6 @@ function getApiKeyFingerprint(token: string): string {
 		.digest("hex");
 }
 
-function maskApiKey(token: string): string {
-	if (token.length <= 8) {
-		return token;
-	}
-
-	return `${token.slice(0, 4)}...${token.slice(-4)}`;
-}
-
 function printUsage(): void {
 	console.log(
 		"Usage: pnpm --filter @llmgateway/scripts api-key-hash <api-key> [more-api-keys...]",
@@ -57,8 +49,8 @@ function main(): void {
 		return;
 	}
 
-	for (const apiKey of args) {
-		console.log(`${maskApiKey(apiKey)}\t${getApiKeyFingerprint(apiKey)}`);
+	for (const [index, apiKey] of args.entries()) {
+		console.log(`key-${index + 1}\t${getApiKeyFingerprint(apiKey)}`);
 	}
 }
 

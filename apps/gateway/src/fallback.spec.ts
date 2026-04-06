@@ -2338,6 +2338,120 @@ describe("fallback and error status code handling", () => {
 			expect(failedLog!.retriedByLogId).toBe(successLog!.id);
 		});
 
+		test("streaming: retries another key for the same provider after timeout", async () => {
+			await setupSingleProviderWithMultipleKeys("together.ai");
+			const primaryKeyHash = getApiKeyFingerprint("together.ai-primary-token");
+			const secondaryKeyHash = getApiKeyFingerprint(
+				"together.ai-secondary-token",
+			);
+			const originalStreamingTimeout = process.env.AI_STREAMING_TIMEOUT_MS;
+			process.env.AI_STREAMING_TIMEOUT_MS = "10";
+
+			try {
+				const res = await app.request("/v1/chat/completions", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: "Bearer real-token",
+						"X-No-Fallback": "true",
+					},
+					body: JSON.stringify({
+						model: "together.ai/glm-4.7",
+						messages: [{ role: "user", content: "TRIGGER_TIMEOUT_FAIL_ONCE" }],
+						stream: true,
+					}),
+				});
+
+				expect(res.status).toBe(200);
+
+				const streamResult = await readAll(res.body);
+				expect(streamResult.hasError).toBe(false);
+				expect(streamResult.hasContent).toBe(true);
+
+				const logs = await waitForLogs(2);
+				const failedLog = logs.find(
+					(log: Log) => log.hasError && log.errorDetails?.statusCode === 0,
+				);
+				const successLog = logs.find(
+					(log: Log) => !log.hasError && log.routingMetadata?.routing,
+				);
+
+				expect(failedLog?.retried).toBe(true);
+				expect(successLog?.routingMetadata?.noFallback).toBe(true);
+				expect(successLog?.routingMetadata?.routing).toHaveLength(2);
+				expect(
+					new Set(
+						successLog?.routingMetadata?.routing?.map(
+							(attempt) => attempt.apiKeyHash,
+						),
+					),
+				).toEqual(new Set([primaryKeyHash, secondaryKeyHash]));
+				expect(successLog?.routingMetadata?.routing?.[0]).toMatchObject({
+					provider: "together.ai",
+					status_code: 0,
+					succeeded: false,
+				});
+				expect(successLog?.routingMetadata?.routing?.[1]).toMatchObject({
+					provider: "together.ai",
+					succeeded: true,
+				});
+			} finally {
+				if (originalStreamingTimeout === undefined) {
+					delete process.env.AI_STREAMING_TIMEOUT_MS;
+				} else {
+					process.env.AI_STREAMING_TIMEOUT_MS = originalStreamingTimeout;
+				}
+			}
+		});
+
+		test("streaming: retries when immediate SSE error omits status fields", async () => {
+			await setupMultiProviderKeys();
+
+			const res = await app.request("/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: "Bearer real-token",
+				},
+				body: JSON.stringify({
+					model: "glm-4.7",
+					messages: [
+						{ role: "user", content: "TRIGGER_STREAM_FAIL_ONCE_NO_STATUS" },
+					],
+					stream: true,
+				}),
+			});
+
+			expect(res.status).toBe(200);
+
+			const streamResult = await readAll(res.body);
+			expect(streamResult.hasError).toBe(false);
+			expect(streamResult.hasContent).toBe(true);
+
+			const logs = await waitForLogs(2);
+			const failedLog = logs.find(
+				(log: Log) => log.hasError && log.errorDetails?.statusCode === 500,
+			);
+			const successLog = logs.find(
+				(log: Log) =>
+					!log.hasError &&
+					log.routingMetadata?.routing &&
+					log.content?.includes("mock response from the test server"),
+			);
+
+			expect(failedLog).toBeDefined();
+			expect(failedLog?.retried).toBe(true);
+			expect(successLog?.routingMetadata?.routing).toHaveLength(2);
+			expect(successLog?.routingMetadata?.routing?.[0]).toMatchObject({
+				status_code: 500,
+				error_type: "upstream_error",
+				succeeded: false,
+			});
+			expect(successLog?.routingMetadata?.routing?.[1]).toMatchObject({
+				succeeded: true,
+			});
+		});
+
 		test("non-streaming: IAM allow_providers prevents retry fallback to a different provider", async () => {
 			await setupMultiProviderKeys();
 			await insertIamRules([

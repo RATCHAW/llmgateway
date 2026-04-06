@@ -807,6 +807,85 @@ describe("getCheapestFromAvailableProviders", () => {
 		expect(result).toBe(null);
 	});
 
+	it("should use the default exploration rate when EXPLORATION_RATE is empty", () => {
+		const originalExplorationRate = process.env.EXPLORATION_RATE;
+		process.env.EXPLORATION_RATE = "";
+
+		try {
+			const testModel = models.find((model) => model.id === "gpt-4o-mini");
+			if (!testModel) {
+				throw new Error("Missing gpt-4o-mini test fixture");
+			}
+
+			expect(() =>
+				getCheapestFromAvailableProviders(
+					[
+						{
+							providerId: "openai",
+							modelName: "gpt-4o-mini",
+						},
+					],
+					testModel,
+				),
+			).not.toThrow();
+		} finally {
+			if (originalExplorationRate === undefined) {
+				delete process.env.EXPLORATION_RATE;
+			} else {
+				process.env.EXPLORATION_RATE = originalExplorationRate;
+			}
+		}
+	});
+
+	it("should throw when EXPLORATION_RATE is outside the valid range", () => {
+		const originalExplorationRate = process.env.EXPLORATION_RATE;
+		const originalArgv = process.argv;
+		const originalNodeEnv = process.env.NODE_ENV;
+		const originalVitest = process.env.VITEST;
+		process.env.EXPLORATION_RATE = "1.5";
+		delete process.env.NODE_ENV;
+		delete process.env.VITEST;
+		process.argv = ["node", "/tmp/not-a-test-run.mjs"];
+
+		try {
+			const testModel = models.find((model) => model.id === "gpt-4o-mini");
+			if (!testModel) {
+				throw new Error("Missing gpt-4o-mini test fixture");
+			}
+
+			expect(() =>
+				getCheapestFromAvailableProviders(
+					[
+						{
+							providerId: "openai",
+							modelName: "gpt-4o-mini",
+						},
+					],
+					testModel,
+				),
+			).toThrow(
+				'Invalid EXPLORATION_RATE: "1.5". Expected a number between 0 and 1.',
+			);
+		} finally {
+			process.argv = originalArgv;
+			if (originalNodeEnv !== undefined) {
+				process.env.NODE_ENV = originalNodeEnv;
+			} else {
+				delete process.env.NODE_ENV;
+			}
+			if (originalVitest !== undefined) {
+				process.env.VITEST = originalVitest;
+			} else {
+				delete process.env.VITEST;
+			}
+			if (originalExplorationRate === undefined) {
+				delete process.env.EXPLORATION_RATE;
+			} else {
+				process.env.EXPLORATION_RATE = originalExplorationRate;
+			}
+		}
+	});
+
 	it("should prefer request pricing over zero token placeholders", () => {
 		expect(
 			getProviderSelectionPrice({

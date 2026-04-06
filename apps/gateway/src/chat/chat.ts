@@ -154,7 +154,11 @@ import {
 	encodeChatMessages,
 	messageContentToString,
 } from "./tools/tokenizer.js";
-import { transformResponseToOpenai } from "./tools/transform-response-to-openai.js";
+import {
+	stripRequestScopedMetadataFromOpenAiResponse,
+	transformResponseToOpenai,
+	withCurrentRequestMetadataOnOpenAiResponse,
+} from "./tools/transform-response-to-openai.js";
 import { transformStreamingToOpenai } from "./tools/transform-streaming-to-openai.js";
 import { validateFreeModelUsage } from "./tools/validate-free-model-usage.js";
 import { validateModelCapabilities } from "./tools/validate-model-capabilities.js";
@@ -511,6 +515,68 @@ function isGoogleCompatibleProvider(provider: string): boolean {
 const SSE_FIELD_PATTERN = /^[a-zA-Z_-]+:\s*/;
 const IMMEDIATE_STREAM_ERROR_PEEK_LIMIT = 64 * 1024;
 
+function inferStreamingErrorStatusCode(
+	openAiCompatibleStreamError: Record<string, unknown>,
+	errorResponseText: string,
+): number {
+	if (typeof openAiCompatibleStreamError.status_code === "number") {
+		return openAiCompatibleStreamError.status_code;
+	}
+	if (typeof openAiCompatibleStreamError.status === "number") {
+		return openAiCompatibleStreamError.status;
+	}
+
+	const errorType =
+		typeof openAiCompatibleStreamError.type === "string"
+			? openAiCompatibleStreamError.type.toLowerCase()
+			: "";
+	const errorCode =
+		typeof openAiCompatibleStreamError.code === "string"
+			? openAiCompatibleStreamError.code.toLowerCase()
+			: "";
+	const errorMessage =
+		typeof openAiCompatibleStreamError.message === "string"
+			? openAiCompatibleStreamError.message.toLowerCase()
+			: "";
+	const errorText = errorResponseText.toLowerCase();
+
+	if (
+		errorType === "authentication_error" ||
+		errorCode === "invalid_api_key" ||
+		errorMessage.includes("invalid api key") ||
+		errorMessage.includes("incorrect api key")
+	) {
+		return 401;
+	}
+	if (errorType === "permission_error" || errorCode === "forbidden") {
+		return 403;
+	}
+	if (
+		errorType === "rate_limit_error" ||
+		errorCode === "rate_limit_exceeded" ||
+		errorMessage.includes("rate limit") ||
+		errorText.includes("rate limit")
+	) {
+		return 429;
+	}
+	if (
+		errorCode === "model_not_found" ||
+		errorMessage.includes("does not exist") ||
+		errorMessage.includes("not found") ||
+		errorText.includes("model_not_found")
+	) {
+		return 404;
+	}
+	if (
+		errorType === "invalid_request_error" ||
+		errorType === "invalid_argument"
+	) {
+		return 400;
+	}
+
+	return 500;
+}
+
 async function inspectImmediateStreamingProviderError(
 	response: Response,
 	provider: Provider,
@@ -543,66 +609,84 @@ async function inspectImmediateStreamingProviderError(
 	const replayChunks: Uint8Array[] = [];
 	let peekBuffer = "";
 
-	while (peekBuffer.length < IMMEDIATE_STREAM_ERROR_PEEK_LIMIT) {
-		const { done, value } = await reader.read();
-		if (done) {
-			break;
-		}
+	try {
+		while (peekBuffer.length < IMMEDIATE_STREAM_ERROR_PEEK_LIMIT) {
+			const { done, value } = await reader.read();
+			if (done) {
+				break;
+			}
 
-		replayChunks.push(value);
-		peekBuffer += decoder.decode(value, { stream: true });
+			replayChunks.push(value);
+			peekBuffer += decoder.decode(value, { stream: true });
 
-		const firstEventData = extractFirstSseEventData(peekBuffer);
-		if (!firstEventData) {
-			continue;
-		}
+			const firstEventData = extractFirstSseEventData(peekBuffer);
+			if (!firstEventData) {
+				continue;
+			}
 
-		let parsedEvent: unknown;
-		try {
-			parsedEvent = JSON.parse(firstEventData);
-		} catch {
-			break;
-		}
+			let parsedEvent: unknown;
+			try {
+				parsedEvent = JSON.parse(firstEventData);
+			} catch {
+				break;
+			}
 
-		const openAiCompatibleStreamError =
-			parsedEvent &&
-			typeof parsedEvent === "object" &&
-			"error" in parsedEvent &&
-			parsedEvent.error &&
-			typeof parsedEvent.error === "object"
-				? (parsedEvent.error as Record<string, unknown>)
-				: null;
+			const openAiCompatibleStreamError =
+				parsedEvent &&
+				typeof parsedEvent === "object" &&
+				"error" in parsedEvent &&
+				parsedEvent.error &&
+				typeof parsedEvent.error === "object"
+					? (parsedEvent.error as Record<string, unknown>)
+					: null;
 
-		if (!openAiCompatibleStreamError) {
-			break;
-		}
+			if (!openAiCompatibleStreamError) {
+				break;
+			}
 
-		const errorResponseText = JSON.stringify(parsedEvent);
-		const inferredStatusCode =
-			typeof openAiCompatibleStreamError.status_code === "number"
-				? openAiCompatibleStreamError.status_code
-				: typeof openAiCompatibleStreamError.status === "number"
-					? openAiCompatibleStreamError.status
-					: 400;
-		const errorType = getFinishReasonFromError(
-			inferredStatusCode,
-			errorResponseText,
-		);
-		const errorMessage =
-			typeof openAiCompatibleStreamError.message === "string"
-				? openAiCompatibleStreamError.message
-				: "Upstream provider returned a streaming error";
-		const errorCode =
-			typeof openAiCompatibleStreamError.code === "string"
-				? openAiCompatibleStreamError.code
-				: typeof openAiCompatibleStreamError.type === "string"
+			const errorResponseText = JSON.stringify(parsedEvent);
+			const inferredStatusCode = inferStreamingErrorStatusCode(
+				openAiCompatibleStreamError,
+				errorResponseText,
+			);
+			const errorType = getFinishReasonFromError(
+				inferredStatusCode,
+				errorResponseText,
+			);
+			const errorMessage =
+				typeof openAiCompatibleStreamError.message === "string"
+					? openAiCompatibleStreamError.message
+					: "Upstream provider returned a streaming error";
+			const errorCode =
+				typeof openAiCompatibleStreamError.code === "string"
+					? openAiCompatibleStreamError.code
+					: typeof openAiCompatibleStreamError.type === "string"
+						? openAiCompatibleStreamError.type
+						: errorType;
+			const statusText =
+				typeof openAiCompatibleStreamError.type === "string"
 					? openAiCompatibleStreamError.type
-					: errorType;
-		const statusText =
-			typeof openAiCompatibleStreamError.type === "string"
-				? openAiCompatibleStreamError.type
-				: "stream_error";
+					: "stream_error";
 
+			try {
+				await reader.cancel();
+			} catch {
+				// Ignore cancellation errors - the response body is no longer needed.
+			}
+
+			return {
+				response,
+				immediateError: {
+					errorCode,
+					errorMessage,
+					errorResponseText,
+					errorType,
+					inferredStatusCode,
+					statusText,
+				},
+			};
+		}
+	} catch (error) {
 		try {
 			await reader.cancel();
 		} catch {
@@ -612,12 +696,13 @@ async function inspectImmediateStreamingProviderError(
 		return {
 			response,
 			immediateError: {
-				errorCode,
-				errorMessage,
-				errorResponseText,
-				errorType,
-				inferredStatusCode,
-				statusText,
+				errorCode: "stream_read_error",
+				errorMessage:
+					error instanceof Error ? error.message : String(error ?? ""),
+				errorResponseText: "",
+				errorType: "stream",
+				inferredStatusCode: 0,
+				statusText: "",
 			},
 		};
 	}
@@ -3348,6 +3433,9 @@ chat.openapi(completions, async (c) => {
 			cacheKey = generateCacheKey(cachePayload);
 			const cachedResponse = cacheKey ? await getCache(cacheKey) : null;
 			if (cachedResponse) {
+				const responseForCurrentRequest =
+					withCurrentRequestMetadataOnOpenAiResponse(cachedResponse, requestId);
+
 				// Log the cached request
 				const duration = 0; // No processing time needed
 				// Extract plugin IDs for logging (cached non-streaming)
@@ -3382,9 +3470,9 @@ chat.openapi(completions, async (c) => {
 					image_config,
 					routingMetadata,
 					rawBody,
-					cachedResponse,
+					responseForCurrentRequest,
 					null, // No upstream request for cached response
-					cachedResponse, // upstream response is same as cached response
+					responseForCurrentRequest, // upstream response is same as cached response
 					cachedPluginIds,
 					undefined, // No plugin results for cached response
 				);
@@ -3468,7 +3556,7 @@ chat.openapi(completions, async (c) => {
 					toolResults: cachedResponse.choices?.[0]?.message?.tool_calls ?? null,
 				});
 
-				return c.json(cachedResponse);
+				return c.json(responseForCurrentRequest);
 			}
 		}
 	}
@@ -4185,6 +4273,17 @@ chat.openapi(completions, async (c) => {
 							// Log the timeout error in the database
 							const timeoutPluginIds = plugins?.map((p) => p.id) ?? [];
 
+							let sameProviderRetryContext: Awaited<
+								ReturnType<typeof resolveProviderContext>
+							> | null = null;
+							rememberFailedKey(usedProvider, usedRegion, {
+								envVarName,
+								configIndex,
+								providerKeyId: providerKey?.id,
+							});
+							sameProviderRetryContext =
+								await tryResolveAlternateKeyForCurrentProvider(true);
+
 							// Check if we should retry before logging so we can mark the log as retried
 							const willRetryTimeout = shouldRetryRequest({
 								requestedProvider,
@@ -4197,6 +4296,9 @@ chat.openapi(completions, async (c) => {
 									1,
 								usedProvider,
 							});
+							const willRetrySameProvider = sameProviderRetryContext !== null;
+							const willRetryRequest =
+								willRetrySameProvider || willRetryTimeout;
 
 							const baseLogEntry = createLogEntry(
 								requestId,
@@ -4270,9 +4372,29 @@ chat.openapi(completions, async (c) => {
 								dataStorageCost: "0",
 								cached: false,
 								toolResults: null,
-								retried: willRetryTimeout,
-								retriedByLogId: willRetryTimeout ? finalLogId : null,
+								retried: willRetryRequest,
+								retriedByLogId: willRetryRequest ? finalLogId : null,
 							});
+
+							if (willRetrySameProvider && sameProviderRetryContext) {
+								routingAttempts.push(
+									buildRoutingAttempt(
+										usedProvider,
+										baseModelName,
+										0,
+										getErrorType(0),
+										false,
+										{
+											region: usedRegion,
+											apiKeyHash: usedApiKeyHash,
+											logId: attemptLogId,
+										},
+									),
+								);
+								applyResolvedProviderContext(sameProviderRetryContext);
+								retryAttempt--;
+								continue;
+							}
 
 							if (willRetryTimeout) {
 								routingAttempts.push(
@@ -5860,12 +5982,10 @@ chat.openapi(completions, async (c) => {
 											),
 										);
 									}
-									const inferredStatusCode =
-										typeof openAiCompatibleStreamError.status_code === "number"
-											? openAiCompatibleStreamError.status_code
-											: typeof openAiCompatibleStreamError.status === "number"
-												? openAiCompatibleStreamError.status
-												: 400;
+									const inferredStatusCode = inferStreamingErrorStatusCode(
+										openAiCompatibleStreamError,
+										errorResponseText,
+									);
 									const errorType = getFinishReasonFromError(
 										inferredStatusCode,
 										errorResponseText,
@@ -8903,7 +9023,11 @@ chat.openapi(completions, async (c) => {
 	}
 
 	if (cachingEnabled && cacheKey && !stream && !hasEmptyNonStreamingResponse) {
-		await setCache(cacheKey, transformedResponse, cacheDuration);
+		await setCache(
+			cacheKey,
+			stripRequestScopedMetadataFromOpenAiResponse(transformedResponse),
+			cacheDuration,
+		);
 	}
 
 	// For image generation models with streaming requested, convert to SSE format

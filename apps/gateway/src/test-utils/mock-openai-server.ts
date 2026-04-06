@@ -47,7 +47,10 @@ function extractTimeoutDelay(content: string): number | null {
 	if (match) {
 		return parseInt(match[1], 10);
 	}
-	if (content.includes("TRIGGER_TIMEOUT")) {
+	if (
+		content.includes("TRIGGER_TIMEOUT") &&
+		!content.includes("TRIGGER_TIMEOUT_FAIL_ONCE")
+	) {
 		// Default to 5 seconds if no specific delay is provided
 		return 5000;
 	}
@@ -781,6 +784,13 @@ mockOpenAIServer.post("/v1/chat/completions", async (c) => {
 		// Subsequent requests succeed - fall through to normal response
 	}
 
+	if (userMessage.includes("TRIGGER_TIMEOUT_FAIL_ONCE")) {
+		failOnceCounter++;
+		if (failOnceCounter === 1) {
+			await delay(100);
+		}
+	}
+
 	// Check if this request should trigger a timeout (delay response)
 	const timeoutDelay = extractTimeoutDelay(userMessage);
 	if (timeoutDelay) {
@@ -808,6 +818,8 @@ mockOpenAIServer.post("/v1/chat/completions", async (c) => {
 		chatMessages,
 		"TRIGGER_STREAM_FAIL_ONCE_404",
 	);
+	const shouldFailOnceWithImmediateStreamServerErrorWithoutStatus =
+		hasUserMessageTrigger(chatMessages, "TRIGGER_STREAM_FAIL_ONCE_NO_STATUS");
 
 	const assistantContent = `Hello! I received your message: "${userMessage}". This is a mock response from the test server.`;
 
@@ -827,6 +839,25 @@ mockOpenAIServer.post("/v1/chat/completions", async (c) => {
 								param: "model",
 								type: "invalid_request_error",
 								status_code: 404,
+							},
+						}),
+						id: String(eventId++),
+					});
+					return;
+				}
+			}
+
+			if (shouldFailOnceWithImmediateStreamServerErrorWithoutStatus) {
+				failOnceCounter++;
+				if (failOnceCounter === 1) {
+					await stream.writeSSE({
+						data: JSON.stringify({
+							id: "chatcmpl-err-500",
+							error: {
+								code: "internal_server_error",
+								message: "Temporary upstream failure.",
+								param: null,
+								type: "server_error",
 							},
 						}),
 						id: String(eventId++),

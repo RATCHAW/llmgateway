@@ -9,13 +9,10 @@ import {
 	getConcurrentTestOptions,
 	getTestOptions,
 	logMode,
+	testModels,
+	toolCallModels,
 	validateLogByRequestId,
 } from "@/chat-helpers.e2e.js";
-
-const responsesModels = [
-	{ model: "openai/gpt-4o-mini" },
-	{ model: "anthropic/claude-haiku-4-5" },
-];
 
 interface ResponsesOutputItem {
 	type: string;
@@ -69,7 +66,7 @@ describe("e2e", getConcurrentTestOptions(), () => {
 		expect(true).toBe(true);
 	});
 
-	test.each(responsesModels)(
+	test.each(testModels)(
 		"responses single-turn $model",
 		getTestOptions(),
 		async ({ model }) => {
@@ -109,7 +106,7 @@ describe("e2e", getConcurrentTestOptions(), () => {
 		},
 	);
 
-	test.each(responsesModels)(
+	test.each(testModels)(
 		"responses multi-turn $model",
 		getTestOptions(),
 		async ({ model }) => {
@@ -154,7 +151,7 @@ describe("e2e", getConcurrentTestOptions(), () => {
 		},
 	);
 
-	test.each(responsesModels)(
+	test.each(toolCallModels)(
 		"responses tool calls $model",
 		getTestOptions(),
 		async ({ model }) => {

@@ -1,0 +1,448 @@
+"use client";
+
+import { Chat, useChat } from "@ai-sdk/react";
+import { createCodePlugin } from "@streamdown/code";
+import { useMutation } from "@tanstack/react-query";
+import { TextStreamChatTransport } from "ai";
+import {
+	MessageCircle,
+	X,
+	Send,
+	RotateCcw,
+	UserRound,
+	Loader2,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Streamdown } from "streamdown";
+
+import { useUser } from "@/hooks/useUser";
+import { Button } from "@/lib/components/button";
+import { useAppConfig } from "@/lib/config";
+import { useFetchClient } from "@/lib/fetch-client";
+import { cn } from "@/lib/utils";
+
+import type { UIMessage } from "ai";
+import type { LinkSafetyConfig } from "streamdown";
+
+const code = createCodePlugin({
+	themes: ["github-light", "github-dark"],
+});
+
+const linkSafety: LinkSafetyConfig = {
+	enabled: true,
+	onLinkCheck: (url: string) => {
+		try {
+			const hostname = new URL(url).hostname;
+			return (
+				hostname === "llmgateway.io" || hostname.endsWith(".llmgateway.io")
+			);
+		} catch {
+			return false;
+		}
+	},
+};
+
+const ESCALATION_THRESHOLD = 3;
+
+const CLIENT_ID_KEY = "chat_support_client_id";
+
+function getOrCreateClientId(): string {
+	if (typeof window === "undefined") {
+		return "";
+	}
+	const existing = sessionStorage.getItem(CLIENT_ID_KEY);
+	if (existing) {
+		return existing;
+	}
+	const id = crypto.randomUUID();
+	sessionStorage.setItem(CLIENT_ID_KEY, id);
+	return id;
+}
+
+function getTextFromParts(message: UIMessage): string {
+	return message.parts
+		.filter((p): p is { type: "text"; text: string } => p.type === "text")
+		.map((p) => p.text)
+		.join("");
+}
+
+export function ChatSupport() {
+	const config = useAppConfig();
+	const fetchClient = useFetchClient();
+	const { user } = useUser();
+	const [isOpen, setIsOpen] = useState(false);
+	const [hasUnread, setHasUnread] = useState(false);
+	const [text, setText] = useState("");
+	const [userName, setUserName] = useState("");
+	const [userEmail, setUserEmail] = useState("");
+	const [hasIdentified, setHasIdentified] = useState(false);
+	const [escalated, setEscalated] = useState(false);
+	const messagesEndRef = useRef<HTMLDivElement>(null);
+	const inputRef = useRef<HTMLTextAreaElement>(null);
+	const prevMessageCountRef = useRef(0);
+	const [clientId] = useState(() => getOrCreateClientId());
+
+	const isLoggedIn = !!user;
+	const effectiveName = isLoggedIn ? (user.name ?? "") : userName;
+	const effectiveEmail = isLoggedIn ? (user.email ?? "") : userEmail;
+	const isIdentified = isLoggedIn || hasIdentified;
+
+	const chat = useMemo(
+		() =>
+			new Chat({
+				transport: new TextStreamChatTransport({
+					api: `${config.apiUrl}/public/chat-support`,
+					body: {
+						name: effectiveName,
+						email: effectiveEmail,
+						clientId,
+					},
+				}),
+			}),
+		[config.apiUrl, effectiveName, effectiveEmail, clientId],
+	);
+
+	const { messages, sendMessage, status, setMessages, error } = useChat({
+		chat,
+	});
+
+	const isLoading = status === "streaming" || status === "submitted";
+
+	useEffect(() => {
+		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+	}, [messages]);
+
+	useEffect(() => {
+		if (isOpen && isIdentified && inputRef.current) {
+			inputRef.current.focus();
+		}
+	}, [isOpen, isIdentified]);
+
+	// Show unread indicator when assistant responds while chat is closed
+	useEffect(() => {
+		if (
+			!isOpen &&
+			messages.length > prevMessageCountRef.current &&
+			messages.length > 0
+		) {
+			const lastMessage = messages[messages.length - 1];
+			if (lastMessage?.role === "assistant") {
+				setHasUnread(true);
+			}
+		}
+		prevMessageCountRef.current = messages.length;
+	});
+
+	const handleOpen = () => {
+		setIsOpen(true);
+		setHasUnread(false);
+	};
+
+	const userMessageCount = messages.filter((m) => m.role === "user").length;
+	const showEscalation = !escalated && userMessageCount >= ESCALATION_THRESHOLD;
+
+	const escalateMutation = useMutation({
+		mutationFn: async () => {
+			const res = await fetchClient.POST(
+				"/public/chat-support/escalate" as never,
+				{
+					body: {
+						name: effectiveName,
+						email: effectiveEmail,
+						clientId,
+						messages: messages.map((m) => ({
+							role: m.role,
+							content: getTextFromParts(m),
+						})),
+					},
+				} as never,
+			);
+			if (res.error) {
+				throw new Error("Escalation failed");
+			}
+			return res.data;
+		},
+		onSuccess: () => {
+			setEscalated(true);
+		},
+	});
+
+	const handleReset = () => {
+		setMessages([]);
+		setEscalated(false);
+		if (!isLoggedIn) {
+			setHasIdentified(false);
+			setUserName("");
+			setUserEmail("");
+		}
+	};
+
+	const handleIdentify = (e: React.FormEvent) => {
+		e.preventDefault();
+		if (!userName.trim()) {
+			return;
+		}
+		setHasIdentified(true);
+	};
+
+	const handleSubmit = (e: React.FormEvent) => {
+		e.preventDefault();
+		const trimmed = text.trim();
+		if (!trimmed || isLoading) {
+			return;
+		}
+		void sendMessage({ text: trimmed });
+		setText("");
+	};
+
+	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+		if (e.key === "Enter" && !e.shiftKey) {
+			e.preventDefault();
+			handleSubmit(e);
+		}
+	};
+
+	return (
+		<>
+			{/* Chat window */}
+			<div
+				className={cn(
+					"fixed bottom-20 right-4 z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl transition-all duration-300 ease-out sm:right-6",
+					isOpen
+						? "h-[min(32rem,calc(100vh-7rem))] w-[min(24rem,calc(100vw-2rem))] scale-100 opacity-100"
+						: "pointer-events-none h-0 w-0 scale-95 opacity-0",
+				)}
+			>
+				{/* Header */}
+				<div className="flex items-center justify-between border-b border-border bg-primary px-4 py-3">
+					<div className="flex items-center gap-2">
+						<div className="flex size-7 items-center justify-center rounded-full bg-primary-foreground/20">
+							<MessageCircle className="size-3.5 text-primary-foreground" />
+						</div>
+						<div>
+							<h3 className="text-sm font-semibold text-primary-foreground">
+								Support
+							</h3>
+							<p className="text-[10px] text-primary-foreground/70">
+								AI-powered help
+							</p>
+						</div>
+					</div>
+					<div className="flex items-center gap-1">
+						<button
+							type="button"
+							onClick={handleReset}
+							className="rounded-md p-1.5 text-primary-foreground/70 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground"
+							aria-label="Reset conversation"
+						>
+							<RotateCcw className="size-3.5" />
+						</button>
+						<button
+							type="button"
+							onClick={() => setIsOpen(false)}
+							className="rounded-md p-1.5 text-primary-foreground/70 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground"
+							aria-label="Close chat"
+						>
+							<X className="size-3.5" />
+						</button>
+					</div>
+				</div>
+
+				{!isIdentified ? (
+					<div className="flex flex-1 flex-col justify-center px-6 py-8">
+						<div className="mb-6 text-center">
+							<h4 className="text-base font-semibold text-foreground">
+								Welcome!
+							</h4>
+							<p className="mt-1 text-sm text-muted-foreground">
+								Please introduce yourself before we start.
+							</p>
+						</div>
+						<form onSubmit={handleIdentify} className="flex flex-col gap-3">
+							<input
+								type="text"
+								value={userName}
+								onChange={(e) => setUserName(e.target.value)}
+								placeholder="Your name *"
+								required
+								className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring"
+								autoFocus
+							/>
+							<input
+								type="email"
+								value={userEmail}
+								onChange={(e) => setUserEmail(e.target.value)}
+								placeholder="Your email (optional)"
+								className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring"
+							/>
+							<Button
+								type="submit"
+								disabled={!userName.trim()}
+								className="mt-1 w-full"
+							>
+								Start Chat
+							</Button>
+						</form>
+					</div>
+				) : (
+					<>
+						{/* Messages */}
+						<div className="flex-1 overflow-y-auto px-4 py-3">
+							<div className="flex flex-col gap-3">
+								{messages.length === 0 && (
+									<div className="flex justify-start">
+										<div className="max-w-[85%] rounded-xl bg-muted px-3 py-2 text-sm leading-relaxed text-foreground">
+											Hi{effectiveName ? ` ${effectiveName}` : ""}! I&apos;m the
+											LLM Gateway support assistant. How can I help you today?
+										</div>
+									</div>
+								)}
+								{messages.map((message) => {
+									const content = getTextFromParts(message);
+									if (!content) {
+										return null;
+									}
+									const isAssistant = message.role === "assistant";
+									const isLastAssistant =
+										isAssistant &&
+										message.id === messages[messages.length - 1]?.id;
+									return (
+										<div
+											key={message.id}
+											className={cn(
+												"flex",
+												isAssistant ? "justify-start" : "justify-end",
+											)}
+										>
+											<div
+												className={cn(
+													"max-w-[85%] overflow-hidden rounded-xl px-3 py-2 text-sm leading-relaxed",
+													isAssistant
+														? "bg-muted text-foreground"
+														: "bg-primary text-primary-foreground",
+												)}
+											>
+												{isAssistant ? (
+													<Streamdown
+														isAnimating={isLastAssistant && isLoading}
+														controls={false}
+														plugins={{ code }}
+														linkSafety={linkSafety}
+														className="overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all"
+													>
+														{content}
+													</Streamdown>
+												) : (
+													content
+												)}
+											</div>
+										</div>
+									);
+								})}
+								{isLoading &&
+									(messages.length === 0 ||
+										messages[messages.length - 1]?.role !== "assistant" ||
+										!getTextFromParts(messages[messages.length - 1]!)) && (
+										<div className="flex justify-start">
+											<div className="flex items-center gap-1.5 rounded-xl bg-muted px-3 py-2">
+												<div className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:-0.3s]" />
+												<div className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:-0.15s]" />
+												<div className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" />
+											</div>
+										</div>
+									)}
+								{error && (
+									<div className="flex justify-start">
+										<div className="max-w-[85%] rounded-xl bg-destructive/10 px-3 py-2 text-sm leading-relaxed text-destructive">
+											Something went wrong. Please try again.
+										</div>
+									</div>
+								)}
+								<div ref={messagesEndRef} />
+							</div>
+						</div>
+
+						{/* Escalation banner */}
+						{showEscalation && (
+							<div className="border-t border-border bg-muted/50 px-4 py-2.5">
+								<p className="mb-1.5 text-xs text-muted-foreground">
+									Still need help?
+								</p>
+								<button
+									type="button"
+									onClick={() => escalateMutation.mutate()}
+									disabled={escalateMutation.isPending}
+									className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+								>
+									{escalateMutation.isPending ? (
+										<Loader2 className="size-3 animate-spin" />
+									) : (
+										<UserRound className="size-3" />
+									)}
+									Talk to a human
+								</button>
+							</div>
+						)}
+						{escalated && (
+							<div className="border-t border-border bg-green-50 px-4 py-2.5 dark:bg-green-950/30">
+								<p className="text-xs text-green-700 dark:text-green-400">
+									We&apos;ve notified our team. We&apos;ll get back to you via
+									email shortly.
+								</p>
+							</div>
+						)}
+
+						{/* Input */}
+						<div className="border-t border-border p-3">
+							<form onSubmit={handleSubmit} className="flex items-end gap-2">
+								<textarea
+									ref={inputRef}
+									value={text}
+									onChange={(e) => setText(e.target.value)}
+									onKeyDown={handleKeyDown}
+									placeholder="Ask about LLM Gateway..."
+									rows={1}
+									className="field-sizing-content max-h-24 min-h-[2.25rem] flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring"
+								/>
+								<Button
+									type="submit"
+									size="icon"
+									disabled={!text.trim() || isLoading}
+									className="size-9 shrink-0 rounded-lg"
+								>
+									<Send className="size-4" />
+									<span className="sr-only">Send message</span>
+								</Button>
+							</form>
+						</div>
+					</>
+				)}
+			</div>
+
+			{/* Floating trigger button */}
+			<button
+				type="button"
+				onClick={isOpen ? () => setIsOpen(false) : handleOpen}
+				className={cn(
+					"fixed bottom-4 right-4 z-50 flex size-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-all duration-300 hover:bg-primary/90 hover:shadow-xl active:scale-95 sm:right-6",
+					isOpen && "rotate-90",
+				)}
+				aria-label={isOpen ? "Close chat" : "Open chat support"}
+			>
+				{isOpen ? (
+					<X className="size-5" />
+				) : (
+					<>
+						<MessageCircle className="size-5" />
+						{hasUnread && (
+							<span className="absolute -right-0.5 -top-0.5 flex size-3">
+								<span className="absolute inline-flex size-full animate-ping rounded-full bg-destructive opacity-75" />
+								<span className="relative inline-flex size-3 rounded-full bg-destructive" />
+							</span>
+						)}
+					</>
+				)}
+			</button>
+		</>
+	);
+}

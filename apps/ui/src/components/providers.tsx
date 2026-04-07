@@ -2,13 +2,13 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
-import { Crisp } from "crisp-sdk-web";
 import { ThemeProvider } from "next-themes";
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
 import { Suspense, useMemo, useEffect } from "react";
 import { Toaster as SonnerToaster } from "sonner";
 
+import { ChatSupport } from "@/components/chat-support";
 import { ReferralHandler } from "@/components/referral-handler";
 import { Toaster } from "@/lib/components/toaster";
 import { toast } from "@/lib/components/use-toast";
@@ -84,23 +84,6 @@ export function Providers({ children, config }: ProvidersProps) {
 		return () => clearTimeout(timer);
 	}, [config.posthogKey, config.posthogHost]);
 
-	// Defer Crisp loading to reduce TBT
-	useEffect(() => {
-		if (!config.crispId) {
-			return;
-		}
-		const id = config.crispId;
-		const load = () => {
-			Crisp.configure(id);
-		};
-		if (typeof requestIdleCallback !== "undefined") {
-			const handle = requestIdleCallback(load);
-			return () => cancelIdleCallback(handle);
-		}
-		const timer = setTimeout(load, 3000);
-		return () => clearTimeout(timer);
-	}, [config.crispId]);
-
 	return (
 		<AppConfigProvider config={config}>
 			<ThemeProvider
@@ -112,8 +95,9 @@ export function Providers({ children, config }: ProvidersProps) {
 				<QueryClientProvider client={queryClient}>
 					<PostHogProvider client={posthog}>{children}</PostHogProvider>
 					{process.env.NODE_ENV === "development" && (
-						<ReactQueryDevtools buttonPosition="bottom-right" />
+						<ReactQueryDevtools buttonPosition="bottom-left" />
 					)}
+					<ChatSupport />
 				</QueryClientProvider>
 				<Toaster />
 				<SonnerToaster richColors position="bottom-right" />

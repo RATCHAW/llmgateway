@@ -65,22 +65,17 @@ export const metadata: Metadata = {
 	},
 };
 
-const softwareAppSchema = {
+const webSiteSchema = {
 	"@context": "https://schema.org",
-	"@type": "SoftwareApplication",
+	"@type": "WebSite",
 	name: "DevPass by LLM Gateway",
 	url: "https://code.llmgateway.io",
-	applicationCategory: "DeveloperApplication",
-	browserRequirements: "Requires JavaScript. Requires HTML5.",
 	description:
 		"Fixed-price dev plans for AI-powered coding with Claude Code, Cursor, Cline, and any OpenAI-compatible tool. One subscription, every model.",
-	offers: {
-		"@type": "AggregateOffer",
-		priceCurrency: "USD",
-		lowPrice: "29",
-		highPrice: "179",
-		offerCount: "3",
-		availability: "https://schema.org/InStock",
+	publisher: {
+		"@type": "Organization",
+		name: "LLM Gateway",
+		url: "https://llmgateway.io",
 	},
 };
 
@@ -94,7 +89,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 					type="application/ld+json"
 					// eslint-disable-next-line @eslint-react/dom/no-dangerously-set-innerhtml
 					dangerouslySetInnerHTML={{
-						__html: JSON.stringify(softwareAppSchema),
+						__html: JSON.stringify(webSiteSchema),
 					}}
 				/>
 			</head>

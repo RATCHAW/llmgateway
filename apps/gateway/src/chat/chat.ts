@@ -3,6 +3,7 @@ import { encode } from "gpt-tokenizer";
 import { HTTPException } from "hono/http-exception";
 import { streamSSE } from "hono/streaming";
 
+import { extractFirstSseEventData } from "@/chat/tools/extract-first-sse-event-data.js";
 import { validateSource } from "@/chat/tools/validate-source.js";
 import { reportKeyError, reportKeySuccess } from "@/lib/api-key-health.js";
 import { assertApiKeyWithinUsageLimits } from "@/lib/api-key-usage-limits.js";
@@ -464,6 +465,250 @@ function isGoogleCompatibleProvider(provider: string): boolean {
 
 // Pre-compiled regex pattern to avoid recompilation per request
 const SSE_FIELD_PATTERN = /^[a-zA-Z_-]+:\s*/;
+const IMMEDIATE_STREAM_ERROR_PEEK_LIMIT = 64 * 1024;
+
+function inferStreamingErrorStatusCode(
+	openAiCompatibleStreamError: Record<string, unknown>,
+	errorResponseText: string,
+): number {
+	if (typeof openAiCompatibleStreamError.status_code === "number") {
+		return openAiCompatibleStreamError.status_code;
+	}
+	if (typeof openAiCompatibleStreamError.status === "number") {
+		return openAiCompatibleStreamError.status;
+	}
+
+	const errorType =
+		typeof openAiCompatibleStreamError.type === "string"
+			? openAiCompatibleStreamError.type.toLowerCase()
+			: "";
+	const errorCode =
+		typeof openAiCompatibleStreamError.code === "string"
+			? openAiCompatibleStreamError.code.toLowerCase()
+			: "";
+	const errorMessage =
+		typeof openAiCompatibleStreamError.message === "string"
+			? openAiCompatibleStreamError.message.toLowerCase()
+			: "";
+	const errorText = errorResponseText.toLowerCase();
+
+	if (
+		errorType === "authentication_error" ||
+		errorCode === "invalid_api_key" ||
+		errorMessage.includes("invalid api key") ||
+		errorMessage.includes("incorrect api key")
+	) {
+		return 401;
+	}
+	if (errorType === "permission_error" || errorCode === "forbidden") {
+		return 403;
+	}
+	if (
+		errorType === "rate_limit_error" ||
+		errorCode === "rate_limit_exceeded" ||
+		errorMessage.includes("rate limit") ||
+		errorText.includes("rate limit")
+	) {
+		return 429;
+	}
+	if (
+		errorCode === "model_not_found" ||
+		errorMessage.includes("does not exist") ||
+		errorMessage.includes("not found") ||
+		errorText.includes("model_not_found")
+	) {
+		return 404;
+	}
+	if (
+		errorType === "content_filter" ||
+		errorCode === "content_filter" ||
+		errorText.includes("responsibleaipolicyviolation") ||
+		errorText.includes("sensitivecontentdetected") ||
+		errorType === "data_inspection_failed" ||
+		errorCode === "data_inspection_failed" ||
+		errorText.includes("input data may contain inappropriate content") ||
+		errorText.includes("content violates usage guidelines")
+	) {
+		return 400;
+	}
+	if (
+		errorType === "invalid_request_error" ||
+		errorType === "invalid_argument"
+	) {
+		return 400;
+	}
+
+	return 500;
+}
+
+export async function inspectImmediateStreamingProviderError(
+	response: Response,
+	provider: Provider,
+): Promise<
+	| {
+			response: Response;
+			immediateError: null;
+	  }
+	| {
+			response: Response;
+			immediateError: {
+				errorCode: string;
+				errorMessage: string;
+				errorResponseText: string;
+				errorType: string;
+				inferredStatusCode: number;
+				statusText: string;
+			};
+	  }
+> {
+	if (!response.body || provider === "aws-bedrock") {
+		return {
+			response,
+			immediateError: null,
+		};
+	}
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	const replayChunks: Uint8Array[] = [];
+	let peekBuffer = "";
+
+	try {
+		while (peekBuffer.length < IMMEDIATE_STREAM_ERROR_PEEK_LIMIT) {
+			const { done, value } = await reader.read();
+			if (done) {
+				break;
+			}
+
+			replayChunks.push(value);
+			peekBuffer += decoder.decode(value, { stream: true });
+
+			const firstEventData = extractFirstSseEventData(peekBuffer);
+			if (!firstEventData) {
+				continue;
+			}
+
+			let parsedEvent: unknown;
+			try {
+				parsedEvent = JSON.parse(firstEventData);
+			} catch {
+				break;
+			}
+
+			const openAiCompatibleStreamError =
+				parsedEvent &&
+				typeof parsedEvent === "object" &&
+				"error" in parsedEvent &&
+				parsedEvent.error &&
+				typeof parsedEvent.error === "object"
+					? (parsedEvent.error as Record<string, unknown>)
+					: null;
+
+			if (!openAiCompatibleStreamError) {
+				break;
+			}
+
+			const errorResponseText = JSON.stringify(parsedEvent);
+			const inferredStatusCode = inferStreamingErrorStatusCode(
+				openAiCompatibleStreamError,
+				errorResponseText,
+			);
+			const errorType = getFinishReasonFromError(
+				inferredStatusCode,
+				errorResponseText,
+			);
+			const errorMessage =
+				typeof openAiCompatibleStreamError.message === "string"
+					? openAiCompatibleStreamError.message
+					: "Upstream provider returned a streaming error";
+			const errorCode =
+				typeof openAiCompatibleStreamError.code === "string"
+					? openAiCompatibleStreamError.code
+					: typeof openAiCompatibleStreamError.type === "string"
+						? openAiCompatibleStreamError.type
+						: errorType;
+			const statusText =
+				typeof openAiCompatibleStreamError.type === "string"
+					? openAiCompatibleStreamError.type
+					: "stream_error";
+
+			try {
+				await reader.cancel();
+			} catch {
+				// Ignore cancellation errors once the immediate error is extracted.
+			}
+
+			return {
+				response,
+				immediateError: {
+					errorCode,
+					errorMessage,
+					errorResponseText,
+					errorType,
+					inferredStatusCode,
+					statusText,
+				},
+			};
+		}
+	} catch (error) {
+		try {
+			await reader.cancel();
+		} catch {
+			// Ignore cancellation errors when the replay stream setup fails.
+		}
+
+		return {
+			response,
+			immediateError: {
+				errorCode: "stream_read_error",
+				errorMessage:
+					error instanceof Error ? error.message : String(error ?? ""),
+				errorResponseText: "",
+				errorType: "upstream_error",
+				inferredStatusCode: 502,
+				statusText: "stream_read_error",
+			},
+		};
+	}
+
+	const replayStream = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			try {
+				for (const chunk of replayChunks) {
+					controller.enqueue(chunk);
+				}
+
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) {
+						break;
+					}
+					controller.enqueue(value);
+				}
+
+				controller.close();
+			} catch (error) {
+				controller.error(error);
+			}
+		},
+		async cancel(reason) {
+			try {
+				await reader.cancel(reason);
+			} catch {
+				// Ignore cancellation errors when the replay stream is closed early.
+			}
+		},
+	});
+
+	return {
+		response: new Response(replayStream, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: new Headers(response.headers),
+		}),
+		immediateError: null,
+	};
+}
 
 // Reusable TextDecoder to avoid per-chunk allocation in the streaming hot path
 const sharedTextDecoder = new TextDecoder();
@@ -3921,7 +4166,7 @@ chat.openapi(completions, async (c) => {
 								const willRetryTimeout = shouldRetryRequest({
 									requestedProvider,
 									noFallback,
-									statusCode: 0,
+									errorType: "upstream_timeout",
 									retryCount: retryAttempt,
 									remainingProviders:
 										(routingMetadata?.providerScores.length ?? 0) -
@@ -4198,7 +4443,7 @@ chat.openapi(completions, async (c) => {
 								const willRetryFetch = shouldRetryRequest({
 									requestedProvider,
 									noFallback,
-									statusCode: 0,
+									errorType: "network_error",
 									retryCount: retryAttempt,
 									remainingProviders:
 										(routingMetadata?.providerScores.length ?? 0) -
@@ -4361,7 +4606,7 @@ chat.openapi(completions, async (c) => {
 							const willRetryHttpError = shouldRetryRequest({
 								requestedProvider,
 								noFallback,
-								statusCode: res.status,
+								errorType: finishReason,
 								retryCount: retryAttempt,
 								remainingProviders:
 									(routingMetadata?.providerScores.length ?? 0) -
@@ -7013,7 +7258,7 @@ chat.openapi(completions, async (c) => {
 			const willRetryFetchNonStreaming = shouldRetryRequest({
 				requestedProvider,
 				noFallback,
-				statusCode: 0,
+				errorType: "network_error",
 				retryCount: retryAttempt,
 				remainingProviders:
 					(routingMetadata?.providerScores.length ?? 0) -
@@ -7420,7 +7665,7 @@ chat.openapi(completions, async (c) => {
 			const willRetryHttpNonStreaming = shouldRetryRequest({
 				requestedProvider,
 				noFallback,
-				statusCode: res.status,
+				errorType: finishReason,
 				retryCount: retryAttempt,
 				remainingProviders:
 					(routingMetadata?.providerScores.length ?? 0) -

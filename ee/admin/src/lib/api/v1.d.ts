@@ -962,6 +962,7 @@ export interface paths {
                                     availableProviders?: string[];
                                     selectedProvider?: string;
                                     selectionReason?: string;
+                                    usedApiKeyHash?: string;
                                     providerScores?: {
                                         providerId: string;
                                         region?: string;
@@ -988,6 +989,8 @@ export interface paths {
                                         status_code: number;
                                         error_type: string;
                                         succeeded: boolean;
+                                        apiKeyHash?: string;
+                                        logId?: string;
                                     }[];
                                 } | null;
                                 retried?: boolean | null;
@@ -1203,6 +1206,7 @@ export interface paths {
                                     availableProviders?: string[];
                                     selectedProvider?: string;
                                     selectionReason?: string;
+                                    usedApiKeyHash?: string;
                                     providerScores?: {
                                         providerId: string;
                                         region?: string;
@@ -1229,6 +1233,8 @@ export interface paths {
                                         status_code: number;
                                         error_type: string;
                                         succeeded: boolean;
+                                        apiKeyHash?: string;
+                                        logId?: string;
                                     }[];
                                 } | null;
                                 retried?: boolean | null;
@@ -3651,6 +3657,173 @@ export interface paths {
                             message: string;
                         };
                     };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/chat-support-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    offset?: number | null;
+                    search?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description List of chat support conversations. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            conversations: {
+                                id: string;
+                                createdAt: string;
+                                updatedAt: string;
+                                name: string | null;
+                                email: string | null;
+                                ipAddress: string | null;
+                                userAgent: string | null;
+                                messageCount: number;
+                                escalatedAt: string | null;
+                                firstMessage: string | null;
+                            }[];
+                            total: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/chat-support-logs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Single chat support conversation with messages. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            createdAt: string;
+                            updatedAt: string;
+                            name: string | null;
+                            email: string | null;
+                            ipAddress: string | null;
+                            userAgent: string | null;
+                            messageCount: number;
+                            escalatedAt: string | null;
+                            messages: {
+                                id: string;
+                                createdAt: string;
+                                role: string;
+                                content: string;
+                                sequence: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Conversation not found. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/chat-support-logs/{id}/reply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        content: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Reply sent successfully. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            success: boolean;
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Conversation not found. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };

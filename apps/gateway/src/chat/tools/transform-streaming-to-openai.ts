@@ -39,6 +39,27 @@ export function transformStreamingToOpenai(
 		};
 	};
 
+	const isKnownNonRenderableAwsBedrockDelta = (delta: any): boolean => {
+		if (!delta || typeof delta !== "object") {
+			return false;
+		}
+
+		if (delta.toolResult || delta.citation || delta.image) {
+			return true;
+		}
+
+		if (delta.reasoningContent) {
+			const reasoningContent = delta.reasoningContent;
+			return (
+				typeof reasoningContent === "object" &&
+				reasoningContent !== null &&
+				!reasoningContent.text
+			);
+		}
+
+		return false;
+	};
+
 	switch (usedProvider) {
 		case "anthropic": {
 			if (data.type === "content_block_delta" && data.delta?.text) {
@@ -1034,6 +1055,26 @@ export function transformStreamingToOpenai(
 						},
 					],
 				};
+			} else if (
+				eventType === "contentBlockDelta" &&
+				data.delta?.reasoningContent?.text
+			) {
+				transformedData = {
+					id: `chatcmpl-${Date.now()}`,
+					object: "chat.completion.chunk",
+					created: Math.floor(Date.now() / 1000),
+					model: usedModel,
+					choices: [
+						{
+							index: 0,
+							delta: {
+								reasoning: data.delta.reasoningContent.text,
+								role: "assistant",
+							},
+							finish_reason: null,
+						},
+					],
+				};
 			} else if (eventType === "contentBlockStart" && data.start?.toolUse) {
 				// Tool use start event contains the tool id and name
 				const toolUse = data.start.toolUse;
@@ -1095,6 +1136,16 @@ export function transformStreamingToOpenai(
 						},
 					],
 				};
+			} else if (
+				eventType === "contentBlockDelta" &&
+				isKnownNonRenderableAwsBedrockDelta(data.delta)
+			) {
+				// Bedrock contentBlockDelta is a documented union. Some known members
+				// like reasoning signatures, citations, images, or tool results don't
+				// have a direct OpenAI chat chunk representation, so we treat them as handled.
+				transformedData = null;
+			} else if (eventType === "contentBlockStop") {
+				transformedData = null;
 			} else if (eventType === "messageStart") {
 				transformedData = {
 					id: `chatcmpl-${Date.now()}`,

@@ -543,6 +543,7 @@ export const log = pgTable(
 			availableProviders?: string[];
 			selectedProvider?: string;
 			selectionReason?: string;
+			usedApiKeyHash?: string;
 			providerScores?: Array<{
 				providerId: string;
 				region?: string;
@@ -573,6 +574,8 @@ export const log = pgTable(
 				status_code: number;
 				error_type: string;
 				succeeded: boolean;
+				apiKeyHash?: string;
+				logId?: string;
 			}>;
 		}>(),
 		processedAt: timestamp(),
@@ -704,6 +707,7 @@ export const videoJob = pgTable(
 			availableProviders?: string[];
 			selectedProvider?: string;
 			selectionReason?: string;
+			usedApiKeyHash?: string;
 			providerScores?: Array<{
 				providerId: string;
 				region?: string;
@@ -734,6 +738,8 @@ export const videoJob = pgTable(
 				status_code: number;
 				error_type: string;
 				succeeded: boolean;
+				apiKeyHash?: string;
+				logId?: string;
 			}>;
 		}>(),
 		upstreamCreateResponse: jsonb(),
@@ -911,6 +917,46 @@ export const message = pgTable(
 		sequence: integer().notNull(), // To maintain message order
 	},
 	(table) => [index("message_chat_id_idx").on(table.chatId)],
+);
+
+export const chatSupportConversation = pgTable(
+	"chat_support_conversation",
+	{
+		id: text().primaryKey().$defaultFn(shortid),
+		createdAt: timestamp().notNull().defaultNow(),
+		updatedAt: timestamp()
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date()),
+		name: text(),
+		email: text(),
+		ipAddress: text(),
+		userAgent: text(),
+		messageCount: integer().notNull().default(0),
+		escalatedAt: timestamp(),
+	},
+	(table) => [
+		index("chat_support_conversation_created_at_idx").on(table.createdAt),
+	],
+);
+
+export const chatSupportMessage = pgTable(
+	"chat_support_message",
+	{
+		id: text().primaryKey().$defaultFn(shortid),
+		createdAt: timestamp().notNull().defaultNow(),
+		conversationId: text()
+			.notNull()
+			.references(() => chatSupportConversation.id, { onDelete: "cascade" }),
+		role: text({
+			enum: ["user", "assistant", "admin"],
+		}).notNull(),
+		content: text().notNull(),
+		sequence: integer().notNull(),
+	},
+	(table) => [
+		index("chat_support_message_conversation_id_idx").on(table.conversationId),
+	],
 );
 
 export const installation = pgTable("installation", {

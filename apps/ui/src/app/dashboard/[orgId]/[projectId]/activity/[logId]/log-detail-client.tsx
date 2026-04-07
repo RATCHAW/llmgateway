@@ -38,6 +38,15 @@ import { cn } from "@/lib/utils";
 import type { LogDetailData } from "@/types/activity";
 import type { Log } from "@llmgateway/db";
 
+interface ImageConfig {
+	aspect_ratio?: string;
+	image_size?: string;
+	n?: number;
+	output_format?: string;
+	output_compression?: number;
+	seed?: number;
+}
+
 interface LogDetailClientProps {
 	initialData: LogDetailData | null;
 	orgId: string;
@@ -162,6 +171,61 @@ function formatDuration(ms: number) {
 	return `${(ms / 1000).toFixed(2)}s`;
 }
 
+function extractBase64Images(
+	content: string,
+): Array<{ src: string; index: number }> {
+	const images: Array<{ src: string; index: number }> = [];
+	// Match data:image/...;base64,... patterns
+	const dataUrlRegex = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+/g;
+	let match;
+	while ((match = dataUrlRegex.exec(content)) !== null) {
+		images.push({ src: match[0].replace(/\s/g, ""), index: images.length });
+	}
+	// If no data URLs found, try treating the entire content as raw base64
+	if (images.length === 0 && /^[A-Za-z0-9+/=\s]+$/.test(content.trim())) {
+		images.push({
+			src: `data:image/png;base64,${content.trim().replace(/\s/g, "")}`,
+			index: 0,
+		});
+	}
+	return images;
+}
+
+function ImageContentRenderer({ content }: { content: string }) {
+	const images = extractBase64Images(content);
+
+	if (images.length === 0) {
+		return (
+			<pre className="max-h-80 text-xs overflow-auto whitespace-pre-wrap break-all font-mono bg-muted/30 rounded-md p-3">
+				{content}
+			</pre>
+		);
+	}
+
+	return (
+		<div className="space-y-4">
+			<div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+				{images.map((img) => (
+					<div
+						key={img.index}
+						className="rounded-md border overflow-hidden bg-muted/30"
+					>
+						<img
+							src={img.src}
+							alt={`Generated image ${img.index + 1}`}
+							className="w-full h-auto"
+						/>
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
+function formatApiKeyHash(hash: string) {
+	return hash.slice(0, 7);
+}
+
 export function LogDetailClient({
 	initialData,
 	orgId,
@@ -204,6 +268,9 @@ export function LogDetailClient({
 			: null,
 		videoDownloadCount: data.log.videoDownloadCount ?? 0,
 	} as Log;
+
+	const imageConfig = (log.params as { image_config?: ImageConfig } | null)
+		?.image_config;
 
 	const retentionEnabled =
 		log.dataStorageCost !== null &&
@@ -406,6 +473,15 @@ export function LogDetailClient({
 											mono
 										/>
 									)}
+									{log.routingMetadata.usedApiKeyHash && (
+										<Field
+											label="Key"
+											value={formatApiKeyHash(
+												log.routingMetadata.usedApiKeyHash,
+											)}
+											mono
+										/>
+									)}
 									{log.routingMetadata.availableProviders &&
 										log.routingMetadata.availableProviders.length > 0 && (
 											<Field
@@ -512,6 +588,19 @@ export function LogDetailClient({
 																	<span className="text-muted-foreground">
 																		({attempt.region})
 																	</span>
+																)}
+																{attempt.apiKeyHash && (
+																	<span className="text-muted-foreground">
+																		key {formatApiKeyHash(attempt.apiKeyHash)}
+																	</span>
+																)}
+																{attempt.logId && (
+																	<Link
+																		href={`/dashboard/${orgId}/${projectId}/activity/${attempt.logId}`}
+																		className="text-muted-foreground hover:underline"
+																	>
+																		log {attempt.logId}
+																	</Link>
 																)}
 															</span>
 															<span>
@@ -703,6 +792,35 @@ export function LogDetailClient({
 										label="Unified Finish Reason"
 										value={log.unifiedFinishReason ?? "-"}
 									/>
+									{imageConfig?.aspect_ratio && (
+										<Field
+											label="Aspect Ratio"
+											value={imageConfig.aspect_ratio}
+										/>
+									)}
+									{imageConfig?.image_size && (
+										<Field label="Image Size" value={imageConfig.image_size} />
+									)}
+									{imageConfig?.n !== undefined && imageConfig.n !== null && (
+										<Field label="Image Count" value={imageConfig.n} />
+									)}
+									{imageConfig?.output_format && (
+										<Field
+											label="Output Format"
+											value={imageConfig.output_format}
+										/>
+									)}
+									{imageConfig?.output_compression !== undefined &&
+										imageConfig.output_compression !== null && (
+											<Field
+												label="Compression"
+												value={imageConfig.output_compression}
+											/>
+										)}
+									{imageConfig?.seed !== undefined &&
+										imageConfig.seed !== null && (
+											<Field label="Seed" value={imageConfig.seed} />
+										)}
 								</TooltipProvider>
 							</div>
 						</Section>
@@ -998,7 +1116,11 @@ export function LogDetailClient({
 
 				<Section title="Response">
 					<div className="rounded-lg border bg-card p-4">
-						{log.content ? (
+						{log.content &&
+						log.content.length > 500 &&
+						/[A-Za-z0-9+/]{200,}/.test(log.content) ? (
+							<ImageContentRenderer content={log.content} />
+						) : log.content ? (
 							<pre className="max-h-80 text-xs overflow-auto whitespace-pre-wrap break-all font-mono bg-muted/30 rounded-md p-3">
 								{log.content}
 							</pre>
@@ -1015,15 +1137,23 @@ export function LogDetailClient({
 					</div>
 				</Section>
 
-				{log.params && Object.keys(log.params).length > 0 && (
-					<Section title="Additional Parameters">
-						<div className="rounded-lg border bg-card p-4">
-							<pre className="max-h-48 text-xs overflow-auto whitespace-pre-wrap break-all font-mono bg-muted/30 rounded-md p-3">
-								{JSON.stringify(log.params, null, 2)}
-							</pre>
-						</div>
-					</Section>
-				)}
+				{log.params &&
+					(() => {
+						const remaining = Object.fromEntries(
+							Object.entries(log.params).filter(
+								([key]) => key !== "image_config",
+							),
+						);
+						return Object.keys(remaining).length > 0 ? (
+							<Section title="Additional Parameters">
+								<div className="rounded-lg border bg-card p-4">
+									<pre className="max-h-48 text-xs overflow-auto whitespace-pre-wrap break-all font-mono bg-muted/30 rounded-md p-3">
+										{JSON.stringify(remaining, null, 2)}
+									</pre>
+								</div>
+							</Section>
+						) : null;
+					})()}
 			</div>
 		</div>
 	);

@@ -26,8 +26,24 @@ import {
 	modelHistory,
 } from "@llmgateway/db";
 import { models, providers } from "@llmgateway/models";
+import {
+	getResendClient,
+	fromEmail,
+	replyToEmail,
+} from "@llmgateway/shared/email";
 
 import type { ServerTypes } from "@/vars.js";
+
+function escapeHtml(text: string): string {
+	const htmlEscapeMap: Record<string, string> = {
+		"&": "&amp;",
+		"<": "&lt;",
+		">": "&gt;",
+		'"': "&quot;",
+		"'": "&#x27;",
+	};
+	return text.replace(/[&<>"']/g, (char) => htmlEscapeMap[char] || char);
+}
 
 export const admin = new OpenAPIHono<ServerTypes>();
 
@@ -1830,6 +1846,10 @@ admin.openapi(getProjectLogs, async (c) => {
 	return c.json({
 		logs: paginatedLogs.map((l) => ({
 			...l,
+			content:
+				l.content && l.content.includes(";base64,")
+					? "[image_generated]"
+					: l.content,
 			promptTokens: l.promptTokens ? String(l.promptTokens) : null,
 			completionTokens: l.completionTokens ? String(l.completionTokens) : null,
 			totalTokens: l.totalTokens ? String(l.totalTokens) : null,
@@ -5564,6 +5584,335 @@ admin.openapi(sendEmail, async (c) => {
 	}
 
 	return c.json({ success: true, message: "Email sent successfully." });
+});
+
+// ── Chat Support Logs ───────────────────────────────────────────────────────
+
+const chatSupportConversationSchema = z.object({
+	id: z.string(),
+	createdAt: z.string(),
+	updatedAt: z.string(),
+	name: z.string().nullable(),
+	email: z.string().nullable(),
+	ipAddress: z.string().nullable(),
+	userAgent: z.string().nullable(),
+	messageCount: z.number(),
+	escalatedAt: z.string().nullable(),
+	firstMessage: z.string().nullable(),
+});
+
+const chatSupportConversationsListSchema = z.object({
+	conversations: z.array(chatSupportConversationSchema),
+	total: z.number(),
+});
+
+const chatSupportMessageSchema = z.object({
+	id: z.string(),
+	createdAt: z.string(),
+	role: z.string(),
+	content: z.string(),
+	sequence: z.number(),
+});
+
+const chatSupportConversationDetailSchema = z.object({
+	id: z.string(),
+	createdAt: z.string(),
+	updatedAt: z.string(),
+	name: z.string().nullable(),
+	email: z.string().nullable(),
+	ipAddress: z.string().nullable(),
+	userAgent: z.string().nullable(),
+	messageCount: z.number(),
+	escalatedAt: z.string().nullable(),
+	messages: z.array(chatSupportMessageSchema),
+});
+
+const getChatSupportConversations = createRoute({
+	method: "get",
+	path: "/chat-support-logs",
+	request: {
+		query: z.object({
+			limit: z.coerce.number().min(1).max(100).default(50).optional(),
+			offset: z.coerce.number().min(0).default(0).optional(),
+			search: z.string().optional(),
+		}),
+	},
+	responses: {
+		200: {
+			content: {
+				"application/json": {
+					schema: chatSupportConversationsListSchema.openapi({}),
+				},
+			},
+			description: "List of chat support conversations.",
+		},
+	},
+});
+
+admin.openapi(getChatSupportConversations, async (c) => {
+	const { limit = 50, offset = 0, search } = c.req.valid("query");
+
+	const t = tables.chatSupportConversation;
+	const mt = tables.chatSupportMessage;
+
+	const conditions = [];
+	if (search) {
+		const matchingConvIds = db
+			.select({ conversationId: mt.conversationId })
+			.from(mt)
+			.where(sql`${mt.content} ILIKE ${"%" + search + "%"}`)
+			.groupBy(mt.conversationId);
+		conditions.push(sql`${t.id} IN (${matchingConvIds})`);
+	}
+
+	const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+	const firstMessageSubquery = db
+		.select({
+			conversationId: mt.conversationId,
+			content: mt.content,
+		})
+		.from(mt)
+		.where(and(eq(mt.role, "user"), eq(mt.sequence, 0)))
+		.as("first_msg");
+
+	const [conversations, countResult] = await Promise.all([
+		db
+			.select({
+				id: t.id,
+				createdAt: t.createdAt,
+				updatedAt: t.updatedAt,
+				name: t.name,
+				email: t.email,
+				ipAddress: t.ipAddress,
+				userAgent: t.userAgent,
+				messageCount: t.messageCount,
+				escalatedAt: t.escalatedAt,
+				firstMessage: firstMessageSubquery.content,
+			})
+			.from(t)
+			.leftJoin(
+				firstMessageSubquery,
+				eq(t.id, firstMessageSubquery.conversationId),
+			)
+			.where(where)
+			.orderBy(desc(t.createdAt))
+			.limit(limit)
+			.offset(offset),
+		db
+			.select({ count: sql<number>`COUNT(*)`.as("count") })
+			.from(t)
+			.where(where),
+	]);
+
+	return c.json({
+		conversations: conversations.map((conv) => ({
+			...conv,
+			createdAt: conv.createdAt.toISOString(),
+			updatedAt: conv.updatedAt.toISOString(),
+			escalatedAt: conv.escalatedAt?.toISOString() ?? null,
+			firstMessage: conv.firstMessage ?? null,
+		})),
+		total: Number(countResult[0]?.count ?? 0),
+	});
+});
+
+const getChatSupportConversation = createRoute({
+	method: "get",
+	path: "/chat-support-logs/{id}",
+	request: {
+		params: z.object({ id: z.string() }),
+	},
+	responses: {
+		200: {
+			content: {
+				"application/json": {
+					schema: chatSupportConversationDetailSchema.openapi({}),
+				},
+			},
+			description: "Single chat support conversation with messages.",
+		},
+		404: {
+			description: "Conversation not found.",
+		},
+	},
+});
+
+admin.openapi(getChatSupportConversation, async (c) => {
+	const { id } = c.req.valid("param");
+
+	const t = tables.chatSupportConversation;
+	const mt = tables.chatSupportMessage;
+
+	const rows = await db
+		.select({
+			id: t.id,
+			createdAt: t.createdAt,
+			updatedAt: t.updatedAt,
+			name: t.name,
+			email: t.email,
+			ipAddress: t.ipAddress,
+			userAgent: t.userAgent,
+			messageCount: t.messageCount,
+			escalatedAt: t.escalatedAt,
+		})
+		.from(t)
+		.where(eq(t.id, id))
+		.limit(1);
+
+	const conversation = rows[0];
+	if (!conversation) {
+		throw new HTTPException(404, { message: "Conversation not found" });
+	}
+
+	const messages = await db
+		.select({
+			id: mt.id,
+			createdAt: mt.createdAt,
+			role: mt.role,
+			content: mt.content,
+			sequence: mt.sequence,
+		})
+		.from(mt)
+		.where(eq(mt.conversationId, id))
+		.orderBy(asc(mt.sequence));
+
+	return c.json({
+		...conversation,
+		createdAt: conversation.createdAt.toISOString(),
+		updatedAt: conversation.updatedAt.toISOString(),
+		escalatedAt: conversation.escalatedAt?.toISOString() ?? null,
+		messages: messages.map((m) => ({
+			...m,
+			createdAt: m.createdAt.toISOString(),
+		})),
+	});
+});
+
+// ── Chat Support Reply ─��────────────────────────────────────────────────────
+
+const replyChatSupportConversation = createRoute({
+	method: "post",
+	path: "/chat-support-logs/{id}/reply",
+	request: {
+		params: z.object({ id: z.string() }),
+		body: {
+			content: {
+				"application/json": {
+					schema: z.object({
+						content: z.string().min(1),
+					}),
+				},
+			},
+		},
+	},
+	responses: {
+		200: {
+			content: {
+				"application/json": {
+					schema: z.object({
+						success: z.boolean(),
+						message: z.string(),
+					}),
+				},
+			},
+			description: "Reply sent successfully.",
+		},
+		404: {
+			description: "Conversation not found.",
+		},
+	},
+});
+
+admin.openapi(replyChatSupportConversation, async (c) => {
+	const { id } = c.req.valid("param");
+	const { content } = c.req.valid("json");
+
+	const t = tables.chatSupportConversation;
+	const mt = tables.chatSupportMessage;
+
+	const rows = await db
+		.select({
+			id: t.id,
+			name: t.name,
+			email: t.email,
+		})
+		.from(t)
+		.where(eq(t.id, id))
+		.limit(1);
+
+	const conversation = rows[0];
+	if (!conversation) {
+		throw new HTTPException(404, { message: "Conversation not found" });
+	}
+
+	await db.transaction(async (tx) => {
+		const [updated] = await tx
+			.update(t)
+			.set({ messageCount: sql`${t.messageCount} + 1` })
+			.where(eq(t.id, id))
+			.returning({ messageCount: t.messageCount });
+
+		const nextSequence = (updated?.messageCount ?? 1) - 1;
+
+		await tx.insert(mt).values({
+			conversationId: id,
+			role: "admin",
+			content,
+			sequence: nextSequence,
+		});
+	});
+
+	if (conversation.email) {
+		const resend = getResendClient();
+		if (!resend) {
+			return c.json(
+				{ success: false, message: "Email service is not configured." },
+				200,
+			);
+		}
+
+		const escapedName = conversation.name ? escapeHtml(conversation.name) : "";
+		const escapedContent = escapeHtml(content);
+
+		const { error } = await resend.emails.send({
+			from: fromEmail,
+			to: [conversation.email],
+			replyTo: replyToEmail,
+			subject: `Reply to your support conversation — LLM Gateway`,
+			html: `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#fff;">
+<table role="presentation" style="width:100%;border-collapse:collapse;">
+<tr><td align="center" style="padding:40px 20px;">
+<table role="presentation" style="max-width:600px;width:100%;border-collapse:collapse;">
+<tr><td style="background-color:#000;padding:30px;text-align:center;border-radius:8px 8px 0 0;">
+<h1 style="margin:0;color:#fff;font-size:22px;font-weight:600;">LLM Gateway Support</h1>
+</td></tr>
+<tr><td style="background-color:#f8f9fa;padding:30px;border-radius:0 0 8px 8px;">
+<p style="margin:0 0 15px;font-size:16px;color:#333;">Hi${escapedName ? ` ${escapedName}` : ""},</p>
+<p style="margin:0 0 15px;font-size:16px;color:#333;">Our team has replied to your support conversation:</p>
+<div style="background:#fff;border:1px solid #e9ecef;border-radius:6px;padding:15px;font-size:14px;line-height:1.6;color:#333;white-space:pre-wrap;">${escapedContent}</div>
+<p style="margin:20px 0 0;font-size:14px;color:#666;">If you need further help, just reply to this email.</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`.trim(),
+		});
+
+		if (error) {
+			return c.json(
+				{ success: false, message: `Failed to send: ${error.message}` },
+				200,
+			);
+		}
+	}
+
+	return c.json({ success: true, message: "Reply sent successfully." });
 });
 
 export default admin;

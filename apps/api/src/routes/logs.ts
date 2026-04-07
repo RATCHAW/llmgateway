@@ -113,6 +113,7 @@ const logSchema = z.object({
 			availableProviders: z.array(z.string()).optional(),
 			selectedProvider: z.string().optional(),
 			selectionReason: z.string().optional(),
+			usedApiKeyHash: z.string().optional(),
 			providerScores: z
 				.array(
 					z.object({
@@ -145,6 +146,8 @@ const logSchema = z.object({
 						status_code: z.number(),
 						error_type: z.string(),
 						succeeded: z.boolean(),
+						apiKeyHash: z.string().optional(),
+						logId: z.string().optional(),
 					}),
 				)
 				.optional(),
@@ -509,9 +512,14 @@ logs.openapi(get, async (c) => {
 		);
 	}
 
-	// Add source filter if provided
+	// Add source filter if provided (supports comma-separated values)
 	if (source) {
-		whereConditions.push(eq(tables.log.source, source));
+		const sources = source.split(",").map((s) => s.trim());
+		if (sources.length === 1) {
+			whereConditions.push(eq(tables.log.source, sources[0]));
+		} else {
+			whereConditions.push(inArray(tables.log.source, sources));
+		}
 	}
 
 	// Add cursor-based pagination conditions
@@ -592,8 +600,17 @@ logs.openapi(get, async (c) => {
 		});
 	}
 
+	const enrichedLogs = await enrichLogsWithVideoContentUrls(paginatedLogs);
+
+	const logsForResponse = enrichedLogs.map((log) => {
+		if (log.content && log.content.includes(";base64,")) {
+			return { ...log, content: "[image_generated]" };
+		}
+		return log;
+	});
+
 	return c.json({
-		logs: await enrichLogsWithVideoContentUrls(paginatedLogs),
+		logs: logsForResponse,
 		pagination: {
 			nextCursor,
 			hasMore,

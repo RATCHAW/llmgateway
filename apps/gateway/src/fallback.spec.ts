@@ -2254,8 +2254,12 @@ describe("fallback and error status code handling", () => {
 			);
 			expect(authLogs).toHaveLength(2);
 			expect(authLogs.some((log: Log) => log.retried)).toBe(true);
-			expect(isTrackedKeyHealthy("together.ai-key-primary")).toBe(false);
-			expect(isTrackedKeyHealthy("together.ai-key-secondary")).toBe(false);
+			expect(isTrackedKeyHealthy("together.ai-key-primary", "glm-4.7")).toBe(
+				false,
+			);
+			expect(isTrackedKeyHealthy("together.ai-key-secondary", "glm-4.7")).toBe(
+				false,
+			);
 		});
 
 		test("non-streaming: retries another key for invalid API key payloads", async () => {
@@ -2298,8 +2302,12 @@ describe("fallback and error status code handling", () => {
 			expect(failedLog?.finishReason).toBe("gateway_error");
 			expect(failedLog?.retried).toBe(true);
 			expect(successLog?.routingMetadata?.routing).toHaveLength(2);
-			expect(isTrackedKeyHealthy("together.ai-key-primary")).toBe(false);
-			expect(isTrackedKeyHealthy("together.ai-key-secondary")).toBe(true);
+			expect(isTrackedKeyHealthy("together.ai-key-primary", "glm-4.7")).toBe(
+				false,
+			);
+			expect(isTrackedKeyHealthy("together.ai-key-secondary", "glm-4.7")).toBe(
+				true,
+			);
 		});
 
 		test("streaming: retries on 500 and delivers response on fallback provider", async () => {
@@ -2420,7 +2428,7 @@ describe("fallback and error status code handling", () => {
 				"together.ai-secondary-token",
 			);
 			const originalStreamingTimeout = process.env.AI_STREAMING_TIMEOUT_MS;
-			process.env.AI_STREAMING_TIMEOUT_MS = "10";
+			process.env.AI_STREAMING_TIMEOUT_MS = "75";
 
 			try {
 				const res = await app.request("/v1/chat/completions", {

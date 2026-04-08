@@ -143,9 +143,12 @@ const anthropicResponseSchema = z.object({
 	usage: z.object({
 		input_tokens: z.number(),
 		output_tokens: z.number(),
-		// Always present in Anthropic responses, set to 0 when no caching occurred.
-		cache_creation_input_tokens: z.number(),
-		cache_read_input_tokens: z.number(),
+		// Anthropic emits these on caching-supported models, but we keep them
+		// optional with a 0 default so the schema doesn't fail validation if an
+		// older Claude model, a beta endpoint, or a future API change ever omits
+		// them. The downstream conversion code already handles 0 correctly.
+		cache_creation_input_tokens: z.number().optional().default(0),
+		cache_read_input_tokens: z.number().optional().default(0),
 	}),
 });
 

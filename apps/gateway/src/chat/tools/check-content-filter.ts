@@ -1,7 +1,12 @@
 import type { BaseMessage, MessageContent } from "@llmgateway/models";
 
 export type ContentFilterMode = "disabled" | "monitor" | "enabled";
-export type ContentFilterMethod = "keywords" | "openai";
+export type ContentFilterMethod = "keywords" | "openai" | "custom";
+
+export interface CustomContentFilterConfig {
+	apiKey: string;
+	model: string;
+}
 
 /**
  * Returns the content filter mode from LLM_CONTENT_FILTER_MODE env var.
@@ -30,6 +35,7 @@ export function getContentFilterMode(): ContentFilterMode {
  * Returns the content filter method from LLM_CONTENT_FILTER_METHOD env var.
  * - "keywords" (default): use the configured keyword list
  * - "openai": use OpenAI's moderation endpoint
+ * - "custom": use LLMGateway chat completions with a moderation prompt
  *
  * Legacy compatibility:
  * - LLM_CONTENT_FILTER_MODE=openai implies method=openai
@@ -42,7 +48,30 @@ export function getContentFilterMethod(): ContentFilterMethod {
 		return "openai";
 	}
 
+	if (envValue === "custom") {
+		return "custom";
+	}
+
 	return "keywords";
+}
+
+function getRequiredEnvValue(envVarName: string): string {
+	const envValue = process.env[envVarName]?.trim();
+
+	if (envValue) {
+		return envValue;
+	}
+
+	throw new Error(
+		`${envVarName} environment variable is required for custom content filter`,
+	);
+}
+
+export function getCustomContentFilterConfig(): CustomContentFilterConfig {
+	return {
+		apiKey: getRequiredEnvValue("LLM_CONTENT_FILTER_CUSTOM_API_KEY"),
+		model: getRequiredEnvValue("LLM_CONTENT_FILTER_CUSTOM_MODEL"),
+	};
 }
 
 /**

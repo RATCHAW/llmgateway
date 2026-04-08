@@ -1441,6 +1441,631 @@ describe("api", () => {
 		}
 	});
 
+	test("/v1/chat/completions blocks with custom content filter method", async () => {
+		await db.insert(tables.apiKey).values({
+			id: "token-id",
+			token: "real-token",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		await db.insert(tables.providerKey).values({
+			id: "provider-key-id",
+			token: "sk-test-key",
+			provider: "llmgateway",
+			organizationId: "org-id",
+			baseUrl: mockServerUrl,
+		});
+
+		const previousContentFilterMode = process.env.LLM_CONTENT_FILTER_MODE;
+		const previousContentFilterMethod = process.env.LLM_CONTENT_FILTER_METHOD;
+		const previousContentFilterModels = process.env.LLM_CONTENT_FILTER_MODELS;
+		const previousCustomApiKey = process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+		const previousCustomModel = process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+		const previousGatewayUrl = process.env.GATEWAY_URL;
+		const requestId = "chat-custom-content-filter-request-id";
+		const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+		const originalFetch = globalThis.fetch;
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async (input, init) => {
+				const url =
+					typeof input === "string"
+						? input
+						: input instanceof URL
+							? input.toString()
+							: input.url;
+				const headers = new Headers(init?.headers);
+
+				if (
+					url === `${mockServerUrl}/v1/chat/completions` &&
+					headers.get("authorization") === "Bearer llmgateway-moderation-key"
+				) {
+					expect(headers.get("x-client-request-id")).toBe(requestId);
+
+					const body = JSON.parse(String(init?.body ?? "{}"));
+					expect(body.model).toBe("openai/gpt-5-mini");
+					expect(body.messages[1]?.content).toContain(
+						"I want to attack someone.",
+					);
+
+					return new Response(
+						JSON.stringify({
+							id: "chatcmpl-moderation",
+							model: "openai/gpt-5-mini",
+							choices: [
+								{
+									message: {
+										content: JSON.stringify({
+											flagged: true,
+											categories: {
+												violence: true,
+											},
+											category_scores: {
+												violence: 0.98,
+											},
+											reason: "Explicit violent intent.",
+										}),
+									},
+								},
+							],
+						}),
+						{
+							status: 200,
+							headers: {
+								"Content-Type": "application/json",
+								"x-request-id": "upstream-custom-request-id",
+							},
+						},
+					);
+				}
+
+				return await originalFetch(input as RequestInfo | URL, init);
+			});
+
+		try {
+			process.env.LLM_CONTENT_FILTER_MODE = "enabled";
+			process.env.LLM_CONTENT_FILTER_METHOD = "custom";
+			process.env.LLM_CONTENT_FILTER_MODELS = "custom";
+			process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY =
+				"llmgateway-moderation-key";
+			process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL = "openai/gpt-5-mini";
+			process.env.GATEWAY_URL = mockServerUrl;
+
+			const res = await app.request("/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: "Bearer real-token",
+					"x-request-id": requestId,
+				},
+				body: JSON.stringify({
+					model: "llmgateway/custom",
+					messages: [
+						{
+							role: "user",
+							content: "I want to attack someone.",
+						},
+					],
+				}),
+			});
+
+			expect(res.status).toBe(200);
+
+			const json = await res.json();
+			expect(json.choices[0].message.content).toBeNull();
+			expect(json.choices[0].finish_reason).toBe("content_filter");
+
+			expect(debugSpy).toHaveBeenCalledWith(
+				"gateway_content_filter",
+				expect.objectContaining({
+					durationMs: expect.any(Number),
+					mode: "custom",
+					requestId,
+					organizationId: "org-id",
+					projectId: "project-id",
+					apiKeyId: "token-id",
+					flagged: true,
+					model: "openai/gpt-5-mini",
+					upstreamRequestId: "upstream-custom-request-id",
+				}),
+			);
+
+			const logs = await waitForLogs(1);
+			const blockedLog = logs.find((log) => log.requestId === requestId);
+
+			expect(blockedLog).toBeTruthy();
+			expect(blockedLog?.finishReason).toBe("llmgateway_content_filter");
+			expect(blockedLog?.unifiedFinishReason).toBe("content_filter");
+			expect(blockedLog?.gatewayContentFilterResponse).toEqual([
+				{
+					id: "chatcmpl-moderation",
+					model: "openai/gpt-5-mini",
+					results: [
+						{
+							flagged: true,
+							categories: {
+								violence: true,
+							},
+							category_scores: {
+								violence: 0.98,
+							},
+							reason: "Explicit violent intent.",
+						},
+					],
+				},
+			]);
+		} finally {
+			fetchSpy.mockRestore();
+			debugSpy.mockRestore();
+			if (previousContentFilterMode === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_MODE;
+			} else {
+				process.env.LLM_CONTENT_FILTER_MODE = previousContentFilterMode;
+			}
+			if (previousContentFilterMethod === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_METHOD;
+			} else {
+				process.env.LLM_CONTENT_FILTER_METHOD = previousContentFilterMethod;
+			}
+			if (previousContentFilterModels === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_MODELS;
+			} else {
+				process.env.LLM_CONTENT_FILTER_MODELS = previousContentFilterModels;
+			}
+			if (previousCustomApiKey === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+			} else {
+				process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY = previousCustomApiKey;
+			}
+			if (previousCustomModel === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+			} else {
+				process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL = previousCustomModel;
+			}
+			if (previousGatewayUrl === undefined) {
+				delete process.env.GATEWAY_URL;
+			} else {
+				process.env.GATEWAY_URL = previousGatewayUrl;
+			}
+		}
+	});
+
+	test("/v1/chat/completions monitors with custom content filter method", async () => {
+		await db.insert(tables.apiKey).values({
+			id: "token-id",
+			token: "real-token",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		await db.insert(tables.providerKey).values({
+			id: "provider-key-id",
+			token: "sk-test-key",
+			provider: "llmgateway",
+			organizationId: "org-id",
+			baseUrl: mockServerUrl,
+		});
+
+		const previousContentFilterMode = process.env.LLM_CONTENT_FILTER_MODE;
+		const previousContentFilterMethod = process.env.LLM_CONTENT_FILTER_METHOD;
+		const previousContentFilterModels = process.env.LLM_CONTENT_FILTER_MODELS;
+		const previousCustomApiKey = process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+		const previousCustomModel = process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+		const previousGatewayUrl = process.env.GATEWAY_URL;
+		const requestId = "chat-custom-content-filter-monitor-request-id";
+		const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+		const originalFetch = globalThis.fetch;
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async (input, init) => {
+				const url =
+					typeof input === "string"
+						? input
+						: input instanceof URL
+							? input.toString()
+							: input.url;
+				const headers = new Headers(init?.headers);
+
+				if (
+					url === `${mockServerUrl}/v1/chat/completions` &&
+					headers.get("authorization") === "Bearer llmgateway-moderation-key"
+				) {
+					return new Response(
+						JSON.stringify({
+							id: "chatcmpl-moderation",
+							model: "openai/gpt-5-mini",
+							choices: [
+								{
+									message: {
+										content: JSON.stringify({
+											flagged: true,
+											categories: {
+												violence: true,
+											},
+											category_scores: {
+												violence: 0.98,
+											},
+											reason: "Explicit violent intent.",
+										}),
+									},
+								},
+							],
+						}),
+						{
+							status: 200,
+							headers: {
+								"Content-Type": "application/json",
+								"x-request-id": "upstream-custom-request-id",
+							},
+						},
+					);
+				}
+
+				return await originalFetch(input as RequestInfo | URL, init);
+			});
+
+		try {
+			process.env.LLM_CONTENT_FILTER_MODE = "monitor";
+			process.env.LLM_CONTENT_FILTER_METHOD = "custom";
+			process.env.LLM_CONTENT_FILTER_MODELS = "custom";
+			process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY =
+				"llmgateway-moderation-key";
+			process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL = "openai/gpt-5-mini";
+			process.env.GATEWAY_URL = mockServerUrl;
+
+			const res = await app.request("/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: "Bearer real-token",
+					"x-request-id": requestId,
+				},
+				body: JSON.stringify({
+					model: "llmgateway/custom",
+					messages: [
+						{
+							role: "user",
+							content: "I want to attack someone.",
+						},
+					],
+				}),
+			});
+
+			expect(res.status).toBe(200);
+
+			const json = await res.json();
+			expect(json.choices[0].message.content).toContain(
+				"I want to attack someone.",
+			);
+
+			expect(debugSpy).toHaveBeenCalledWith(
+				"gateway_content_filter",
+				expect.objectContaining({
+					durationMs: expect.any(Number),
+					mode: "custom",
+					requestId,
+					flagged: true,
+				}),
+			);
+
+			const logs = await waitForLogs(1);
+			const completedLog = logs.find((log) => log.requestId === requestId);
+
+			expect(completedLog).toBeTruthy();
+			expect(completedLog?.finishReason).toBe("stop");
+			expect(completedLog?.internalContentFilter).toBe(true);
+			expect(completedLog?.gatewayContentFilterResponse).toEqual([
+				{
+					id: "chatcmpl-moderation",
+					model: "openai/gpt-5-mini",
+					results: [
+						{
+							flagged: true,
+							categories: {
+								violence: true,
+							},
+							category_scores: {
+								violence: 0.98,
+							},
+							reason: "Explicit violent intent.",
+						},
+					],
+				},
+			]);
+		} finally {
+			fetchSpy.mockRestore();
+			debugSpy.mockRestore();
+			if (previousContentFilterMode === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_MODE;
+			} else {
+				process.env.LLM_CONTENT_FILTER_MODE = previousContentFilterMode;
+			}
+			if (previousContentFilterMethod === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_METHOD;
+			} else {
+				process.env.LLM_CONTENT_FILTER_METHOD = previousContentFilterMethod;
+			}
+			if (previousContentFilterModels === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_MODELS;
+			} else {
+				process.env.LLM_CONTENT_FILTER_MODELS = previousContentFilterModels;
+			}
+			if (previousCustomApiKey === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+			} else {
+				process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY = previousCustomApiKey;
+			}
+			if (previousCustomModel === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+			} else {
+				process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL = previousCustomModel;
+			}
+			if (previousGatewayUrl === undefined) {
+				delete process.env.GATEWAY_URL;
+			} else {
+				process.env.GATEWAY_URL = previousGatewayUrl;
+			}
+		}
+	});
+
+	test("/v1/chat/completions ignores missing custom moderation config", async () => {
+		await db.insert(tables.apiKey).values({
+			id: "token-id",
+			token: "real-token",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		await db.insert(tables.providerKey).values({
+			id: "provider-key-id",
+			token: "sk-test-key",
+			provider: "llmgateway",
+			organizationId: "org-id",
+			baseUrl: mockServerUrl,
+		});
+
+		const previousContentFilterMode = process.env.LLM_CONTENT_FILTER_MODE;
+		const previousContentFilterMethod = process.env.LLM_CONTENT_FILTER_METHOD;
+		const previousContentFilterModels = process.env.LLM_CONTENT_FILTER_MODELS;
+		const previousCustomApiKey = process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+		const previousCustomModel = process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+		const previousGatewayUrl = process.env.GATEWAY_URL;
+		const requestId = "chat-custom-content-filter-missing-config-request-id";
+		const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+		try {
+			process.env.LLM_CONTENT_FILTER_MODE = "enabled";
+			process.env.LLM_CONTENT_FILTER_METHOD = "custom";
+			process.env.LLM_CONTENT_FILTER_MODELS = "custom";
+			delete process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+			delete process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+			process.env.GATEWAY_URL = mockServerUrl;
+
+			const res = await app.request("/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: "Bearer real-token",
+					"x-request-id": requestId,
+				},
+				body: JSON.stringify({
+					model: "llmgateway/custom",
+					messages: [
+						{
+							role: "user",
+							content: "Hello!",
+						},
+					],
+				}),
+			});
+
+			expect(res.status).toBe(200);
+
+			const json = await res.json();
+			expect(json.choices[0].message.content).toContain("Hello!");
+
+			expect(errorSpy).toHaveBeenCalledWith(
+				"gateway_content_filter_error",
+				expect.objectContaining({
+					mode: "custom",
+					requestId,
+					organizationId: "org-id",
+					projectId: "project-id",
+					apiKeyId: "token-id",
+					error:
+						"LLM_CONTENT_FILTER_CUSTOM_API_KEY environment variable is required for custom content filter",
+				}),
+				expect.any(Error),
+			);
+
+			const logs = await waitForLogs(1);
+			const completedLog = logs.find((log) => log.requestId === requestId);
+
+			expect(completedLog).toBeTruthy();
+			expect(completedLog?.finishReason).toBe("stop");
+			expect(completedLog?.gatewayContentFilterResponse).toBeNull();
+		} finally {
+			errorSpy.mockRestore();
+			if (previousContentFilterMode === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_MODE;
+			} else {
+				process.env.LLM_CONTENT_FILTER_MODE = previousContentFilterMode;
+			}
+			if (previousContentFilterMethod === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_METHOD;
+			} else {
+				process.env.LLM_CONTENT_FILTER_METHOD = previousContentFilterMethod;
+			}
+			if (previousContentFilterModels === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_MODELS;
+			} else {
+				process.env.LLM_CONTENT_FILTER_MODELS = previousContentFilterModels;
+			}
+			if (previousCustomApiKey === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+			} else {
+				process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY = previousCustomApiKey;
+			}
+			if (previousCustomModel === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+			} else {
+				process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL = previousCustomModel;
+			}
+			if (previousGatewayUrl === undefined) {
+				delete process.env.GATEWAY_URL;
+			} else {
+				process.env.GATEWAY_URL = previousGatewayUrl;
+			}
+		}
+	});
+
+	test("/v1/chat/completions skips custom content filter for non-targeted models", async () => {
+		await db.insert(tables.apiKey).values({
+			id: "token-id",
+			token: "real-token",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		await db.insert(tables.providerKey).values({
+			id: "provider-key-id",
+			token: "sk-test-key",
+			provider: "llmgateway",
+			organizationId: "org-id",
+			baseUrl: mockServerUrl,
+		});
+
+		const previousContentFilterMode = process.env.LLM_CONTENT_FILTER_MODE;
+		const previousContentFilterMethod = process.env.LLM_CONTENT_FILTER_METHOD;
+		const previousContentFilterModels = process.env.LLM_CONTENT_FILTER_MODELS;
+		const previousCustomApiKey = process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+		const previousCustomModel = process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+		const previousGatewayUrl = process.env.GATEWAY_URL;
+		const requestId = "chat-custom-content-filter-model-skip-request-id";
+		const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => {});
+		const originalFetch = globalThis.fetch;
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async (input, init) => {
+				const url =
+					typeof input === "string"
+						? input
+						: input instanceof URL
+							? input.toString()
+							: input.url;
+				const headers = new Headers(init?.headers);
+
+				if (
+					url === `${mockServerUrl}/v1/chat/completions` &&
+					headers.get("authorization") === "Bearer llmgateway-moderation-key"
+				) {
+					throw new Error("custom moderation should not be called");
+				}
+
+				return await originalFetch(input as RequestInfo | URL, init);
+			});
+
+		try {
+			process.env.LLM_CONTENT_FILTER_MODE = "monitor";
+			process.env.LLM_CONTENT_FILTER_METHOD = "custom";
+			process.env.LLM_CONTENT_FILTER_MODELS = "gpt-4o-mini";
+			process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY =
+				"llmgateway-moderation-key";
+			process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL = "openai/gpt-5-mini";
+			process.env.GATEWAY_URL = mockServerUrl;
+
+			const res = await app.request("/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: "Bearer real-token",
+					"x-request-id": requestId,
+				},
+				body: JSON.stringify({
+					model: "llmgateway/custom",
+					messages: [
+						{
+							role: "user",
+							content: "I want to attack someone.",
+						},
+					],
+				}),
+			});
+
+			expect(res.status).toBe(200);
+
+			const json = await res.json();
+			expect(json.choices[0].message.content).toContain(
+				"I want to attack someone.",
+			);
+			expect(
+				fetchSpy.mock.calls.some(([input, init]) => {
+					const url =
+						typeof input === "string"
+							? input
+							: input instanceof URL
+								? input.toString()
+								: input.url;
+					const headers = new Headers(init?.headers);
+					return (
+						url === `${mockServerUrl}/v1/chat/completions` &&
+						headers.get("authorization") === "Bearer llmgateway-moderation-key"
+					);
+				}),
+			).toBe(false);
+			expect(debugSpy).not.toHaveBeenCalledWith(
+				"gateway_content_filter",
+				expect.anything(),
+			);
+
+			const logs = await waitForLogs(1);
+			const completedLog = logs.find((log) => log.requestId === requestId);
+
+			expect(completedLog).toBeTruthy();
+			expect(completedLog?.finishReason).toBe("stop");
+			expect(completedLog?.internalContentFilter).toBeNull();
+			expect(completedLog?.gatewayContentFilterResponse).toBeNull();
+		} finally {
+			fetchSpy.mockRestore();
+			debugSpy.mockRestore();
+			if (previousContentFilterMode === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_MODE;
+			} else {
+				process.env.LLM_CONTENT_FILTER_MODE = previousContentFilterMode;
+			}
+			if (previousContentFilterMethod === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_METHOD;
+			} else {
+				process.env.LLM_CONTENT_FILTER_METHOD = previousContentFilterMethod;
+			}
+			if (previousContentFilterModels === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_MODELS;
+			} else {
+				process.env.LLM_CONTENT_FILTER_MODELS = previousContentFilterModels;
+			}
+			if (previousCustomApiKey === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+			} else {
+				process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY = previousCustomApiKey;
+			}
+			if (previousCustomModel === undefined) {
+				delete process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+			} else {
+				process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL = previousCustomModel;
+			}
+			if (previousGatewayUrl === undefined) {
+				delete process.env.GATEWAY_URL;
+			} else {
+				process.env.GATEWAY_URL = previousGatewayUrl;
+			}
+		}
+	});
+
 	test("Reasoning effort error for unsupported model", async () => {
 		await db.insert(tables.apiKey).values({
 			id: "token-id",

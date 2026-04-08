@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 
 import {
 	checkContentFilter,
+	getCustomContentFilterConfig,
 	getContentFilterModels,
 	getContentFilterMethod,
 	getContentFilterMode,
@@ -207,6 +208,58 @@ describe("getContentFilterMethod", () => {
 		process.env.LLM_CONTENT_FILTER_MODE = "openai";
 		delete process.env.LLM_CONTENT_FILTER_METHOD;
 		expect(getContentFilterMethod()).toBe("openai");
+	});
+
+	it("returns custom when method is set to custom", () => {
+		process.env.LLM_CONTENT_FILTER_METHOD = "custom";
+		expect(getContentFilterMethod()).toBe("custom");
+	});
+});
+
+describe("getCustomContentFilterConfig", () => {
+	const originalApiKey = process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+	const originalModel = process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+
+	afterEach(() => {
+		if (originalApiKey === undefined) {
+			delete process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+		} else {
+			process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY = originalApiKey;
+		}
+
+		if (originalModel === undefined) {
+			delete process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+		} else {
+			process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL = originalModel;
+		}
+	});
+
+	it("returns the configured api key and model", () => {
+		process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY = "custom-key";
+		process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL = "openai/gpt-5-mini";
+
+		expect(getCustomContentFilterConfig()).toEqual({
+			apiKey: "custom-key",
+			model: "openai/gpt-5-mini",
+		});
+	});
+
+	it("throws when the custom api key is missing", () => {
+		delete process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY;
+		process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL = "openai/gpt-5-mini";
+
+		expect(() => getCustomContentFilterConfig()).toThrow(
+			"LLM_CONTENT_FILTER_CUSTOM_API_KEY environment variable is required for custom content filter",
+		);
+	});
+
+	it("throws when the custom model is missing", () => {
+		process.env.LLM_CONTENT_FILTER_CUSTOM_API_KEY = "custom-key";
+		delete process.env.LLM_CONTENT_FILTER_CUSTOM_MODEL;
+
+		expect(() => getCustomContentFilterConfig()).toThrow(
+			"LLM_CONTENT_FILTER_CUSTOM_MODEL environment variable is required for custom content filter",
+		);
 	});
 });
 

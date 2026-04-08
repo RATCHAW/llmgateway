@@ -107,6 +107,7 @@ import {
 import { convertImagesToBase64 } from "./tools/convert-images-to-base64.js";
 import { countInputImages } from "./tools/count-input-images.js";
 import { createLogEntry } from "./tools/create-log-entry.js";
+import { checkCustomContentFilter } from "./tools/custom-content-filter.js";
 import { estimateTokensFromContent } from "./tools/estimate-tokens-from-content.js";
 import { estimateTokens } from "./tools/estimate-tokens.js";
 import {
@@ -1909,9 +1910,23 @@ chat.openapi(completions, async (c) => {
 					c.req.raw.signal,
 				)
 			: null;
+	const customContentFilterResult =
+		shouldApplyGatewayContentFilter && contentFilterMethod === "custom"
+			? await checkCustomContentFilter(
+					messages as BaseMessage[],
+					{
+						requestId,
+						organizationId: project.organizationId,
+						projectId: project.id,
+						apiKeyId: apiKey.id,
+					},
+					c.req.raw.signal,
+				)
+			: null;
 	const contentFilterMatched =
 		keywordContentFilterMatch !== null ||
-		openAIContentFilterResult?.flagged === true;
+		openAIContentFilterResult?.flagged === true ||
+		customContentFilterResult?.flagged === true;
 	const shouldRerouteContentFilter =
 		contentFilterMode === "enabled" && contentFilterMatched;
 	let contentFilterRoutingExcludedProviders: ProviderModelMapping[] = [];
@@ -3003,9 +3018,12 @@ chat.openapi(completions, async (c) => {
 	const shouldTagContentFilter =
 		(contentFilterMode === "monitor" && contentFilterMatched) ||
 		contentFilterRoutingApplied;
-	const gatewayContentFilterResponse = openAIContentFilterResult?.responses
-		.length
-		? openAIContentFilterResult.responses
+	const gatewayContentFilterResponses = [
+		...(openAIContentFilterResult?.responses ?? []),
+		...(customContentFilterResult?.responses ?? []),
+	];
+	const gatewayContentFilterResponse = gatewayContentFilterResponses.length
+		? gatewayContentFilterResponses
 		: null;
 	const insertLog = (
 		logData: Parameters<typeof _insertLog>[0],

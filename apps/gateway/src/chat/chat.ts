@@ -117,7 +117,6 @@ import { extractErrorCause } from "./tools/extract-error-cause.js";
 import { extractReasoning } from "./tools/extract-reasoning.js";
 import { extractTokenUsage } from "./tools/extract-token-usage.js";
 import { extractToolCalls } from "./tools/extract-tool-calls.js";
-import { getDefaultAutoModelId } from "./tools/get-default-auto-model-id.js";
 import { getFinishReasonFromError } from "./tools/get-finish-reason-from-error.js";
 import { getProviderEnv } from "./tools/get-provider-env.js";
 import { hasMeaningfulAssistantOutput } from "./tools/has-meaningful-assistant-output.js";
@@ -1408,20 +1407,20 @@ chat.openapi(completions, async (c) => {
 		(usedProvider === "llmgateway" && usedModel === "auto") ||
 		usedModel === "auto"
 	) {
-		// Estimate the context size needed based on the request
-		let requiredContextSize = 0;
+		// Estimate prompt/input tokens first so auto-routing can react to large prompts
+		let estimatedInputTokens = 0;
 
 		// Estimate prompt tokens from messages
 		if (messages && messages.length > 0) {
 			try {
-				requiredContextSize = encodeChatMessages(messages);
+				estimatedInputTokens = encodeChatMessages(messages);
 			} catch {
 				// Fallback to simple estimation if encoding fails
 				const messageTokens = messages.reduce(
 					(acc, m) => acc + (m.content?.length ?? 0),
 					0,
 				);
-				requiredContextSize = Math.max(1, Math.round(messageTokens / 4));
+				estimatedInputTokens = Math.max(1, Math.round(messageTokens / 4));
 			}
 		}
 
@@ -1430,12 +1429,15 @@ chat.openapi(completions, async (c) => {
 			try {
 				const toolsString = JSON.stringify(tools);
 				const toolTokens = Math.round(toolsString.length / 4);
-				requiredContextSize += toolTokens;
+				estimatedInputTokens += toolTokens;
 			} catch {
 				// Fallback estimation for tools
-				requiredContextSize += tools.length * 100; // Rough estimate per tool
+				estimatedInputTokens += tools.length * 100; // Rough estimate per tool
 			}
 		}
+
+		// Estimate the full context needed based on the request
+		let requiredContextSize = estimatedInputTokens;
 
 		// Add max_tokens if specified
 		if (max_tokens) {
@@ -1475,7 +1477,13 @@ chat.openapi(completions, async (c) => {
 			}
 		}
 
-		const defaultAutoModelId = getDefaultAutoModelId(requiredContextSize);
+		// Find the cheapest model that meets our context size requirements.
+		// Only consider hardcoded models for auto selection unless free_models_only is set.
+		const allowedAutoModels = [
+			"claude-opus-4-6",
+			"claude-sonnet-4-6",
+			"claude-haiku-4-5",
+		];
 
 		let selectedModel: ModelDefinition | undefined;
 		let selectedProviders: any[] = [];
@@ -1501,6 +1509,14 @@ chat.openapi(completions, async (c) => {
 					if (!("free" in modelDef && modelDef.free)) {
 						continue;
 					}
+				} else if (!allowedAutoModels.includes(modelDef.id)) {
+					continue;
+				} else if (
+					estimatedInputTokens > 10_000 &&
+					modelDef.id === "claude-haiku-4-5"
+				) {
+					// Prefer Sonnet over Haiku for larger prompts once the input crosses 10k tokens.
+					continue;
 				}
 
 				// Validate IAM rules for this candidate model and filter providers.
@@ -1636,22 +1652,7 @@ chat.openapi(completions, async (c) => {
 			};
 		}
 
-		const preferredAutoCandidate = await findBestAutoRoutingCandidate(
-			models.filter((modelDef) => modelDef.id === defaultAutoModelId),
-		);
-		const fallbackAutoCandidate = preferredAutoCandidate
-			? null
-			: await findBestAutoRoutingCandidate(
-					models.filter(
-						(modelDef) =>
-							modelDef.id !== "auto" &&
-							modelDef.id !== "custom" &&
-							modelDef.id !== defaultAutoModelId,
-					),
-				);
-
-		const autoRoutingCandidate =
-			preferredAutoCandidate ?? fallbackAutoCandidate;
+		const autoRoutingCandidate = await findBestAutoRoutingCandidate(models);
 		if (autoRoutingCandidate) {
 			selectedModel = autoRoutingCandidate.selectedModel;
 			selectedProviders = autoRoutingCandidate.selectedProviders;
@@ -1712,11 +1713,9 @@ chat.openapi(completions, async (c) => {
 						"No non-reasoning models are available for auto routing. Remove no_reasoning parameter or use a specific model.",
 				});
 			}
-			// Default fallback if no suitable model is found - keep the preferred
-			// auto-routed model id and let the generic provider selection below pick
-			// an allowed provider for it.
-			usedModel = defaultAutoModelId;
-			usedProvider = undefined;
+			// Default fallback if no suitable model is found - use cheapest allowed model
+			usedModel = "claude-haiku-4-5";
+			usedProvider = "anthropic";
 		}
 		// Update modelInfo to the selected model so retry/fallback logic can find
 		// alternative providers. Without this, modelInfo still points to the "auto"
@@ -1728,9 +1727,7 @@ chat.openapi(completions, async (c) => {
 			};
 		} else {
 			// Fallback case: look up the default model definition
-			const fallbackModelDef = models.find(
-				(modelDef) => modelDef.id === defaultAutoModelId,
-			);
+			const fallbackModelDef = models.find((m) => m.id === "claude-haiku-4-5");
 			if (fallbackModelDef) {
 				modelInfo = {
 					...fallbackModelDef,

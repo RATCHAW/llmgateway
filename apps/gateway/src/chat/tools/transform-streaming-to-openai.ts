@@ -9,6 +9,29 @@ import { transformOpenaiStreaming } from "./transform-openai-streaming.js";
 import type { Annotation, StreamingDelta } from "./types.js";
 import type { Provider } from "@llmgateway/models";
 
+function normalizeAnthropicUsage(usage: any): any {
+	if (!usage || typeof usage !== "object") {
+		return null;
+	}
+	const inputTokens = usage.input_tokens ?? 0;
+	const cacheCreation = usage.cache_creation_input_tokens ?? 0;
+	const cacheRead = usage.cache_read_input_tokens ?? 0;
+	const outputTokens = usage.output_tokens ?? 0;
+	const promptTokens = inputTokens + cacheCreation + cacheRead;
+	const hasCacheInfo = cacheRead > 0 || cacheCreation > 0;
+	return {
+		prompt_tokens: promptTokens,
+		completion_tokens: outputTokens,
+		total_tokens: promptTokens + outputTokens,
+		...(hasCacheInfo && {
+			prompt_tokens_details: {
+				cached_tokens: cacheRead,
+				...(cacheCreation > 0 && { cache_creation_tokens: cacheCreation }),
+			},
+		}),
+	};
+}
+
 export function transformStreamingToOpenai(
 	usedProvider: Provider,
 	usedModel: string,
@@ -58,7 +81,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (
 				data.type === "content_block_delta" &&
@@ -80,7 +103,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (
 				data.type === "content_block_start" &&
@@ -106,7 +129,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (
 				data.type === "content_block_start" &&
@@ -137,7 +160,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (
 				data.type === "content_block_delta" &&
@@ -163,7 +186,7 @@ export function transformStreamingToOpenai(
 								finish_reason: null,
 							},
 						],
-						usage: data.usage ?? null,
+						usage: normalizeAnthropicUsage(data.usage),
 					};
 				} else {
 					transformedData = {
@@ -188,7 +211,7 @@ export function transformStreamingToOpenai(
 								finish_reason: null,
 							},
 						],
-						usage: data.usage ?? null,
+						usage: normalizeAnthropicUsage(data.usage),
 					};
 				}
 			} else if (
@@ -224,7 +247,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (data.type === "message_delta" && data.delta?.stop_reason) {
 				const stopReason = data.delta.stop_reason;
@@ -249,7 +272,7 @@ export function transformStreamingToOpenai(
 											: "stop",
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (data.type === "message_stop" || data.stop_reason) {
 				const stopReason = data.stop_reason ?? "end_turn";
@@ -274,7 +297,7 @@ export function transformStreamingToOpenai(
 											: "stop",
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (data.delta?.text) {
 				transformedData = {
@@ -292,7 +315,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else {
 				logger.warn("[streaming] Unrecognized Anthropic chunk", {
@@ -316,7 +339,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			}
 			break;

@@ -30,6 +30,7 @@ export function parseProviderResponse(
 	let totalTokens = null;
 	let reasoningTokens = null;
 	let cachedTokens = null;
+	let cacheCreationTokens = null;
 	let toolResults = null;
 	let images: ImageObject[] = [];
 	const annotations: Annotation[] = [];
@@ -106,6 +107,7 @@ export function parseProviderResponse(
 				totalTokens = json.usage.totalTokens ?? null;
 				// Cached tokens are the tokens read from cache (discount applies to these)
 				cachedTokens = cacheReadTokens;
+				cacheCreationTokens = cacheWriteTokens;
 			}
 
 			// Extract tool calls if present
@@ -185,15 +187,16 @@ export function parseProviderResponse(
 			// We need to add cache_creation_input_tokens to get total input tokens
 			if (json.usage) {
 				const inputTokens = json.usage.input_tokens ?? 0;
-				const cacheCreationTokens = json.usage.cache_creation_input_tokens ?? 0;
+				const cacheCreation = json.usage.cache_creation_input_tokens ?? 0;
 				const cacheReadTokens = json.usage.cache_read_input_tokens ?? 0;
 
 				// Total prompt tokens = non-cached + cache creation + cache read
-				promptTokens = inputTokens + cacheCreationTokens + cacheReadTokens;
+				promptTokens = inputTokens + cacheCreation + cacheReadTokens;
 				completionTokens = json.usage.output_tokens ?? null;
 				reasoningTokens = json.usage.reasoning_output_tokens ?? null;
 				// Cached tokens are the tokens read from cache (discount applies to these)
 				cachedTokens = cacheReadTokens;
+				cacheCreationTokens = cacheCreation;
 				totalTokens =
 					promptTokens && completionTokens
 						? promptTokens + completionTokens
@@ -841,6 +844,7 @@ export function parseProviderResponse(
 		totalTokens,
 		reasoningTokens,
 		cachedTokens,
+		cacheCreationTokens,
 		toolResults,
 		images,
 		annotations: annotations.length > 0 ? annotations : null,

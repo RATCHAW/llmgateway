@@ -107,7 +107,11 @@ function buildUsageObject(
 	cachedTokens: number | null,
 	costs: CostData | null,
 	showUpgradeMessage = false,
+	cacheCreationTokens: number | null = null,
 ) {
+	const hasCacheRead = cachedTokens !== null;
+	const hasCacheCreation =
+		cacheCreationTokens !== null && cacheCreationTokens > 0;
 	return {
 		prompt_tokens: Math.max(1, promptTokens ?? 1),
 		completion_tokens: completionTokens ?? 0,
@@ -119,9 +123,12 @@ function buildUsageObject(
 		...(reasoningTokens !== null && {
 			reasoning_tokens: reasoningTokens,
 		}),
-		...(cachedTokens !== null && {
+		...((hasCacheRead || hasCacheCreation) && {
 			prompt_tokens_details: {
-				cached_tokens: cachedTokens,
+				cached_tokens: cachedTokens ?? 0,
+				...(hasCacheCreation && {
+					cache_creation_tokens: cacheCreationTokens,
+				}),
 			},
 		}),
 		...(costs !== null && {
@@ -166,6 +173,7 @@ export function transformResponseToOpenai(
 	routing: RoutingAttempt[] | null = null,
 	requestId = "",
 	usedRegion?: string | undefined,
+	cacheCreationTokens: number | null = null,
 ) {
 	let transformedResponse = json;
 
@@ -225,6 +233,7 @@ export function transformResponseToOpenai(
 					cachedTokens,
 					costs,
 					showUpgradeMessage,
+					cacheCreationTokens,
 				),
 				metadata: buildMetadata(
 					requestedModel,
@@ -275,6 +284,7 @@ export function transformResponseToOpenai(
 					cachedTokens,
 					costs,
 					showUpgradeMessage,
+					cacheCreationTokens,
 				),
 				metadata: buildMetadata(
 					requestedModel,
@@ -319,6 +329,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,
@@ -413,6 +424,7 @@ export function transformResponseToOpenai(
 					cachedTokens,
 					costs,
 					showUpgradeMessage,
+					cacheCreationTokens,
 				),
 				metadata: buildMetadata(
 					requestedModel,
@@ -455,6 +467,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,
@@ -553,6 +566,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,
@@ -652,6 +666,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,
@@ -742,6 +757,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,
@@ -833,6 +849,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,

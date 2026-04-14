@@ -790,6 +790,7 @@ export const alibabaModels = [
 		providers: [
 			{
 				providerId: "nebius",
+				deactivatedAt: new Date("2026-04-14"),
 				modelName: "Qwen/Qwen3-Coder-480B-A35B-Instruct",
 				inputPrice: 0.4 / 1e6,
 				outputPrice: 1.8 / 1e6,
@@ -852,6 +853,7 @@ export const alibabaModels = [
 		providers: [
 			{
 				providerId: "nebius",
+				deactivatedAt: new Date("2026-04-14"),
 				modelName: "Qwen/Qwen3-Coder-30B-A3B-Instruct",
 				inputPrice: 0.1 / 1e6,
 				outputPrice: 0.3 / 1e6,
@@ -921,6 +923,7 @@ export const alibabaModels = [
 		providers: [
 			{
 				providerId: "nebius",
+				deactivatedAt: new Date("2026-04-14"),
 				modelName: "Qwen/Qwen3-30B-A3B-Thinking-2507",
 				inputPrice: 0.1 / 1e6,
 				outputPrice: 0.3 / 1e6,

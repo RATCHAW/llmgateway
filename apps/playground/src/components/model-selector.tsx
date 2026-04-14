@@ -462,11 +462,11 @@ export function ModelSelector({
 	const [selectedProviderId, selectedModelIdRaw] = raw.includes("/")
 		? (raw.split("/") as [string, string])
 		: ["", raw];
-	// Strip :region suffix for root model lookup, keep raw for mapping match.
+	// Strip the last :region segment for root model lookup, keep raw for mapping match.
 	// Model names can contain colons (e.g., "anthropic.claude-3-5-haiku-20241022-v1:0"),
-	// so we first try a direct match, then fall back to stripping the last colon segment.
+	// so we only strip the final segment to preserve the base model name.
 	const selectedModelId = selectedModelIdRaw.includes(":")
-		? selectedModelIdRaw.split(":")[0]
+		? selectedModelIdRaw.split(":").slice(0, -1).join(":")
 		: selectedModelIdRaw;
 	// Direct lookup by model.id, then fallback: search all models for a mapping
 	// that matches the raw provider model name (handles region-expanded names like

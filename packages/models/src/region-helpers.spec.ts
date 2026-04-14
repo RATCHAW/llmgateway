@@ -93,6 +93,7 @@ describe("expandProviderRegions", () => {
 		// Singapore inherits parent pricing
 		const singapore = result.find((r) => r.region === "singapore");
 		expect(singapore?.inputPrice).toBe(0.4 / 1e6);
+		expect(singapore?.outputPrice).toBe(1.6 / 1e6);
 
 		// Beijing overrides pricing
 		const beijing = result.find((r) => r.region === "cn-beijing");

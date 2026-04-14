@@ -275,7 +275,7 @@ describe("getProviderEndpoint", () => {
 
 		it("uses 'apac.' prefix for me- regions", () => {
 			process.env.LLM_AWS_BEDROCK_BASE_URL =
-				"https://bedrock-runtime.me-south-1.amazonaws.com";
+				"https://bedrock-runtime.me-central-1.amazonaws.com";
 
 			const endpoint = getProviderEndpoint(
 				"aws-bedrock",
@@ -288,7 +288,7 @@ describe("getProviderEndpoint", () => {
 				undefined,
 				undefined,
 				undefined,
-				"me-south-1",
+				"me-central-1",
 			);
 
 			expect(endpoint).toContain(

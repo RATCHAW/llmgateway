@@ -264,6 +264,13 @@ export const testModels = filteredModels
 			model.providers as ProviderModelMapping[],
 		);
 		for (const provider of expandedProviders) {
+			// Skip region-specific entries by default — they duplicate the root
+			// entry and require region-aware provider keys. Only include them
+			// when explicitly requested via TEST_MODELS with a region suffix.
+			if (provider.region && !specifiedModels) {
+				continue;
+			}
+
 			// Skip deactivated provider mappings
 			if (provider.deactivatedAt && new Date() > provider.deactivatedAt) {
 				continue;
@@ -352,6 +359,11 @@ export const providerModels = filteredModels
 			model.providers as ProviderModelMapping[],
 		);
 		for (const provider of expandedProviders) {
+			// Skip region-specific entries by default
+			if (provider.region && !specifiedModels) {
+				continue;
+			}
+
 			// Skip deactivated provider mappings
 			if (provider.deactivatedAt && new Date() > provider.deactivatedAt) {
 				continue;

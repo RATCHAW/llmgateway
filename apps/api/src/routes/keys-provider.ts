@@ -32,6 +32,8 @@ const providerKeySchema = z.object({
 			aws_bedrock_region: z
 				.enum([
 					"us-east-1",
+					"us-east-2",
+					"us-west-1",
 					"us-west-2",
 					"eu-west-1",
 					"eu-central-1",
@@ -72,6 +74,8 @@ const createProviderKeySchema = z.object({
 			aws_bedrock_region: z
 				.enum([
 					"us-east-1",
+					"us-east-2",
+					"us-west-1",
 					"us-west-2",
 					"eu-west-1",
 					"eu-central-1",

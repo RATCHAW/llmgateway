@@ -169,4 +169,217 @@ describe("getProviderEndpoint", () => {
 			"https://vertex-2.example/v1/projects/project-b/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
 		);
 	});
+
+	describe("aws-bedrock region prefix", () => {
+		const originalBedrockBaseUrl = process.env.LLM_AWS_BEDROCK_BASE_URL;
+
+		afterEach(() => {
+			if (originalBedrockBaseUrl === undefined) {
+				delete process.env.LLM_AWS_BEDROCK_BASE_URL;
+			} else {
+				process.env.LLM_AWS_BEDROCK_BASE_URL = originalBedrockBaseUrl;
+			}
+		});
+
+		it("uses 'us.' prefix for us-east-1 region", () => {
+			process.env.LLM_AWS_BEDROCK_BASE_URL =
+				"https://bedrock-runtime.us-east-1.amazonaws.com";
+
+			const endpoint = getProviderEndpoint(
+				"aws-bedrock",
+				undefined,
+				"anthropic.claude-sonnet-4-5-20250929-v1:0",
+				undefined,
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				"us-east-1",
+			);
+
+			expect(endpoint).toContain(
+				"/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			);
+		});
+
+		it("uses 'us.' prefix for us-west-2 region", () => {
+			process.env.LLM_AWS_BEDROCK_BASE_URL =
+				"https://bedrock-runtime.us-west-2.amazonaws.com";
+
+			const endpoint = getProviderEndpoint(
+				"aws-bedrock",
+				undefined,
+				"anthropic.claude-sonnet-4-5-20250929-v1:0",
+				undefined,
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				"us-west-2",
+			);
+
+			expect(endpoint).toContain(
+				"/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			);
+		});
+
+		it("uses 'eu.' prefix for eu-west-1 region", () => {
+			process.env.LLM_AWS_BEDROCK_BASE_URL =
+				"https://bedrock-runtime.eu-west-1.amazonaws.com";
+
+			const endpoint = getProviderEndpoint(
+				"aws-bedrock",
+				undefined,
+				"anthropic.claude-sonnet-4-5-20250929-v1:0",
+				undefined,
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				"eu-west-1",
+			);
+
+			expect(endpoint).toContain(
+				"/model/eu.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			);
+		});
+
+		it("uses 'apac.' prefix for ap-northeast-1 region", () => {
+			process.env.LLM_AWS_BEDROCK_BASE_URL =
+				"https://bedrock-runtime.ap-northeast-1.amazonaws.com";
+
+			const endpoint = getProviderEndpoint(
+				"aws-bedrock",
+				undefined,
+				"anthropic.claude-sonnet-4-5-20250929-v1:0",
+				undefined,
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				"ap-northeast-1",
+			);
+
+			expect(endpoint).toContain(
+				"/model/apac.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			);
+		});
+
+		it("uses 'apac.' prefix for me- regions", () => {
+			process.env.LLM_AWS_BEDROCK_BASE_URL =
+				"https://bedrock-runtime.me-south-1.amazonaws.com";
+
+			const endpoint = getProviderEndpoint(
+				"aws-bedrock",
+				undefined,
+				"anthropic.claude-sonnet-4-5-20250929-v1:0",
+				undefined,
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				"me-south-1",
+			);
+
+			expect(endpoint).toContain(
+				"/model/apac.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			);
+		});
+
+		it("falls back to 'us.' prefix for unknown region prefixes", () => {
+			process.env.LLM_AWS_BEDROCK_BASE_URL =
+				"https://bedrock-runtime.ca-central-1.amazonaws.com";
+
+			const endpoint = getProviderEndpoint(
+				"aws-bedrock",
+				undefined,
+				"anthropic.claude-sonnet-4-5-20250929-v1:0",
+				undefined,
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				"ca-central-1",
+			);
+
+			expect(endpoint).toContain(
+				"/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			);
+		});
+
+		it("uses converse-stream endpoint when streaming", () => {
+			process.env.LLM_AWS_BEDROCK_BASE_URL =
+				"https://bedrock-runtime.us-east-1.amazonaws.com";
+
+			const endpoint = getProviderEndpoint(
+				"aws-bedrock",
+				undefined,
+				"anthropic.claude-sonnet-4-5-20250929-v1:0",
+				undefined,
+				true,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				"us-east-1",
+			);
+
+			expect(endpoint).toContain(
+				"/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse-stream",
+			);
+		});
+
+		it("falls back to legacy prefix when no region is provided", () => {
+			process.env.LLM_AWS_BEDROCK_BASE_URL =
+				"https://bedrock-runtime.us-east-1.amazonaws.com";
+
+			const endpoint = getProviderEndpoint(
+				"aws-bedrock",
+				undefined,
+				"anthropic.claude-sonnet-4-5-20250929-v1:0",
+				undefined,
+				false,
+			);
+
+			expect(endpoint).toContain(
+				"/model/global.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			);
+		});
+
+		it("uses providerKeyOptions prefix when no region is provided", () => {
+			process.env.LLM_AWS_BEDROCK_BASE_URL =
+				"https://bedrock-runtime.us-east-1.amazonaws.com";
+
+			const endpoint = getProviderEndpoint(
+				"aws-bedrock",
+				undefined,
+				"anthropic.claude-sonnet-4-5-20250929-v1:0",
+				undefined,
+				false,
+				undefined,
+				undefined,
+				{ aws_bedrock_region_prefix: "eu." },
+				undefined,
+				undefined,
+				undefined,
+			);
+
+			expect(endpoint).toContain(
+				"/model/eu.anthropic.claude-sonnet-4-5-20250929-v1:0/converse",
+			);
+		});
+	});
 });

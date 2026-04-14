@@ -353,6 +353,8 @@ export const providers = [
 			defaultRegion: "us-east-1",
 			regions: [
 				{ id: "us-east-1", label: "US East (N. Virginia, default)" },
+				{ id: "us-east-2", label: "US East (Ohio)" },
+				{ id: "us-west-1", label: "US West (N. California)" },
 				{ id: "us-west-2", label: "US West (Oregon)" },
 				{ id: "eu-west-1", label: "Europe (Ireland)" },
 				{ id: "eu-central-1", label: "Europe (Frankfurt)" },
@@ -361,6 +363,8 @@ export const providers = [
 			],
 			endpointMap: {
 				"us-east-1": "https://bedrock-runtime.us-east-1.amazonaws.com",
+				"us-east-2": "https://bedrock-runtime.us-east-2.amazonaws.com",
+				"us-west-1": "https://bedrock-runtime.us-west-1.amazonaws.com",
 				"us-west-2": "https://bedrock-runtime.us-west-2.amazonaws.com",
 				"eu-west-1": "https://bedrock-runtime.eu-west-1.amazonaws.com",
 				"eu-central-1": "https://bedrock-runtime.eu-central-1.amazonaws.com",

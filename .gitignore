@@ -32,3 +32,4 @@ generate-image-*.png
 *.mp4
 scripts/*.jpg
 scripts/*.png
+.soulforge

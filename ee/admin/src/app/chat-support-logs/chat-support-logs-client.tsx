@@ -1,8 +1,11 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
 	AlertTriangle,
+	Archive,
+	ArchiveRestore,
+	ArrowLeft,
 	Clock,
 	Globe,
 	Mail,
@@ -10,12 +13,22 @@ import {
 	Monitor,
 	Search,
 	Send,
+	Trash2,
 	User,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useFetchClient } from "@/lib/fetch-client";
+import { useApi } from "@/lib/fetch-client";
 import { cn } from "@/lib/utils";
 
 function timeAgo(dateString: string): string {
@@ -104,104 +117,161 @@ function parseDevice(userAgent: string): string {
 	return `${browser} on ${os}`;
 }
 
-interface ConversationDetail {
-	id: string;
-	createdAt: string;
-	updatedAt: string;
-	name: string | null;
-	email: string | null;
-	ipAddress: string | null;
-	userAgent: string | null;
-	messageCount: number;
-	escalatedAt: string | null;
-	messages: {
-		id: string;
-		createdAt: string;
-		role: string;
-		content: string;
-		sequence: number;
-	}[];
-}
-
 export function ChatSupportLogsClient() {
-	const $fetch = useFetchClient();
+	const $api = useApi();
 	const queryClient = useQueryClient();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [search, setSearch] = useState("");
 	const [debouncedSearch, setDebouncedSearch] = useState("");
 	const [replyText, setReplyText] = useState("");
+	const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+	const [showArchived, setShowArchived] = useState(false);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const replyInputRef = useRef<HTMLTextAreaElement>(null);
+
+	const { data: readStatusData } = $api.useQuery(
+		"get",
+		"/admin/chat-support-logs/read-statuses",
+	);
+
+	const readMap = readStatusData?.readStatuses ?? {};
+
+	const markReadMutation = $api.useMutation(
+		"post",
+		"/admin/chat-support-logs/{id}/read",
+		{
+			onSuccess: () => {
+				void queryClient.invalidateQueries({
+					queryKey: $api.queryOptions(
+						"get",
+						"/admin/chat-support-logs/read-statuses",
+					).queryKey,
+				});
+			},
+		},
+	);
+	const markRead = markReadMutation.mutate;
 
 	useEffect(() => {
 		const timer = setTimeout(() => setDebouncedSearch(search), 300);
 		return () => clearTimeout(timer);
 	}, [search]);
 
-	const { data: listData, isLoading: listLoading } = useQuery({
-		queryKey: ["chat-support-logs", debouncedSearch],
-		queryFn: async () => {
-			const { data } = await $fetch.GET("/admin/chat-support-logs", {
-				params: {
-					query: {
-						limit: 100,
-						offset: 0,
-						search: debouncedSearch || undefined,
-					},
+	const { data: listData, isLoading: listLoading } = $api.useQuery(
+		"get",
+		"/admin/chat-support-logs",
+		{
+			params: {
+				query: {
+					limit: 100,
+					offset: 0,
+					search: debouncedSearch || undefined,
+					archived: showArchived ? "true" : "false",
 				},
-			});
-			return data ?? { conversations: [], total: 0 };
+			},
 		},
-	});
+	);
 
-	const conversations = listData?.conversations ?? [];
+	const conversations = useMemo(
+		() => listData?.conversations ?? [],
+		[listData?.conversations],
+	);
 
-	const { data: detail, isLoading: detailLoading } = useQuery({
-		queryKey: ["chat-support-log", selectedId],
-		queryFn: async () => {
-			if (!selectedId) {
-				return null;
-			}
-			const { data } = await $fetch.GET("/admin/chat-support-logs/{id}", {
-				params: { path: { id: selectedId } },
-			});
-			return (data as ConversationDetail | undefined) ?? null;
+	const { data: detail, isLoading: detailLoading } = $api.useQuery(
+		"get",
+		"/admin/chat-support-logs/{id}",
+		{
+			params: { path: { id: selectedId! } },
 		},
-		enabled: !!selectedId,
-	});
+		{
+			enabled: !!selectedId,
+		},
+	);
 
-	const replyMutation = useMutation({
-		mutationFn: async ({ id, content }: { id: string; content: string }) => {
-			const { data } = await $fetch.POST(
-				"/admin/chat-support-logs/{id}/reply",
-				{
-					params: { path: { id } },
-					body: { content },
-				},
-			);
-			return data;
+	const replyMutation = $api.useMutation(
+		"post",
+		"/admin/chat-support-logs/{id}/reply",
+		{
+			onSuccess: () => {
+				setReplyText("");
+				void queryClient.invalidateQueries({
+					queryKey: $api.queryOptions("get", "/admin/chat-support-logs/{id}", {
+						params: { path: { id: selectedId! } },
+					}).queryKey,
+				});
+				void queryClient.invalidateQueries({
+					queryKey: $api.queryOptions("get", "/admin/chat-support-logs")
+						.queryKey,
+				});
+			},
 		},
-		onSuccess: () => {
-			setReplyText("");
-			void queryClient.invalidateQueries({
-				queryKey: ["chat-support-log", selectedId],
-			});
-			void queryClient.invalidateQueries({
-				queryKey: ["chat-support-logs"],
-			});
+	);
+
+	const invalidateChatLists = () => {
+		void queryClient.invalidateQueries({
+			queryKey: $api.queryOptions("get", "/admin/chat-support-logs").queryKey,
+		});
+		void queryClient.invalidateQueries({
+			queryKey: $api.queryOptions(
+				"get",
+				"/admin/chat-support-logs/read-statuses",
+			).queryKey,
+		});
+	};
+
+	const deleteMutation = $api.useMutation(
+		"delete",
+		"/admin/chat-support-logs/{id}",
+		{
+			onSuccess: () => {
+				setSelectedId(null);
+				setDeleteDialogOpen(false);
+				invalidateChatLists();
+			},
 		},
-	});
+	);
+
+	const archiveMutation = $api.useMutation(
+		"patch",
+		"/admin/chat-support-logs/{id}/archive",
+		{
+			onSuccess: (_data, { params }) => {
+				const archivedId = params.path.id;
+				setSelectedId(null);
+				invalidateChatLists();
+				void queryClient.invalidateQueries({
+					queryKey: $api.queryOptions("get", "/admin/chat-support-logs/{id}", {
+						params: { path: { id: archivedId } },
+					}).queryKey,
+				});
+			},
+		},
+	);
 
 	useEffect(() => {
-		if (detail?.messages) {
+		if (detail?.messages && selectedId) {
 			messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+			markRead({
+				params: { path: { id: selectedId } },
+				body: { messageCount: detail.messages.length },
+			});
 		}
-	}, [detail?.messages]);
+	}, [detail?.messages, selectedId, markRead]);
 
-	const handleSelectConversation = useCallback((id: string) => {
-		setSelectedId(id);
-		setReplyText("");
-	}, []);
+	const handleSelectConversation = useCallback(
+		(id: string) => {
+			setSelectedId(id);
+			setReplyText("");
+			const conv = conversations.find((c) => c.id === id);
+			if (conv) {
+				markRead({
+					params: { path: { id } },
+					body: { messageCount: conv.messageCount },
+				});
+			}
+		},
+		[conversations, markRead],
+	);
 
 	const handleReplySubmit = (e: React.FormEvent) => {
 		e.preventDefault();
@@ -209,7 +279,10 @@ export function ChatSupportLogsClient() {
 		if (!trimmed || !selectedId || replyMutation.isPending) {
 			return;
 		}
-		replyMutation.mutate({ id: selectedId, content: trimmed });
+		replyMutation.mutate({
+			params: { path: { id: selectedId } },
+			body: { content: trimmed },
+		});
 	};
 
 	const handleReplyKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -224,12 +297,35 @@ export function ChatSupportLogsClient() {
 	return (
 		<div className="flex h-[calc(100vh-3.5rem)] overflow-hidden md:h-screen">
 			{/* Left panel — Conversation list */}
-			<div className="flex w-80 shrink-0 flex-col border-r border-border/60 bg-card">
+			<div
+				className={cn(
+					"flex min-h-0 flex-col border-r border-border/60 bg-card",
+					selectedId ? "hidden md:flex md:w-80" : "w-full md:w-80",
+				)}
+			>
 				{/* Search header */}
 				<div className="border-b border-border/60 px-4 py-3">
-					<h2 className="mb-3 text-sm font-semibold tracking-tight text-foreground">
-						Conversations
-					</h2>
+					<div className="mb-3 flex items-center justify-between">
+						<h2 className="text-sm font-semibold tracking-tight text-foreground">
+							Conversations
+						</h2>
+						<button
+							type="button"
+							onClick={() => {
+								setShowArchived((v) => !v);
+								setSelectedId(null);
+							}}
+							className={cn(
+								"flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors",
+								showArchived
+									? "bg-primary text-primary-foreground"
+									: "text-muted-foreground hover:text-foreground",
+							)}
+						>
+							<Archive className="h-3 w-3" />
+							Archived
+						</button>
+					</div>
 					<div className="relative">
 						<Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
 						<input
@@ -243,7 +339,7 @@ export function ChatSupportLogsClient() {
 				</div>
 
 				{/* Conversation list */}
-				<ScrollArea className="flex-1">
+				<ScrollArea className="flex-1 overflow-hidden">
 					{listLoading ? (
 						<div className="flex flex-col gap-1 p-2">
 							{Array.from({ length: 8 }).map((_, i) => (
@@ -300,6 +396,9 @@ export function ChatSupportLogsClient() {
 												<AlertTriangle className="h-2 w-2 text-white" />
 											</span>
 										)}
+										{(readMap[conv.id] ?? 0) < conv.messageCount && (
+											<span className="absolute -left-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-blue-500" />
+										)}
 									</div>
 									<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 										<div className="flex items-center justify-between gap-2">
@@ -336,7 +435,12 @@ export function ChatSupportLogsClient() {
 			</div>
 
 			{/* Middle panel — Chat thread */}
-			<div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
+			<div
+				className={cn(
+					"flex min-w-0 flex-1 flex-col overflow-hidden bg-background",
+					!selectedId && "hidden md:flex",
+				)}
+			>
 				{!selectedId ? (
 					<div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
 						<MessageCircle className="h-12 w-12 opacity-20" />
@@ -365,6 +469,13 @@ export function ChatSupportLogsClient() {
 					<>
 						{/* Chat header */}
 						<div className="flex items-center gap-3 border-b border-border/60 px-6 py-3">
+							<button
+								type="button"
+								onClick={() => setSelectedId(null)}
+								className="mr-1 flex h-8 w-8 items-center justify-center rounded-lg hover:bg-muted md:hidden"
+							>
+								<ArrowLeft className="h-4 w-4" />
+							</button>
 							<div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">
 								{detail.name
 									? detail.name
@@ -389,6 +500,14 @@ export function ChatSupportLogsClient() {
 									<span className="text-xs font-medium">Escalated</span>
 								</div>
 							)}
+							<button
+								type="button"
+								onClick={() => setDeleteDialogOpen(true)}
+								className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive xl:hidden"
+							>
+								<Trash2 className="h-4 w-4" />
+								<span className="sr-only">Delete conversation</span>
+							</button>
 						</div>
 
 						{/* Messages */}
@@ -403,7 +522,7 @@ export function ChatSupportLogsClient() {
 											key={message.id}
 											className={cn(
 												"flex",
-												isAssistant ? "justify-start" : "justify-end",
+												isUser ? "justify-start" : "justify-end",
 											)}
 										>
 											<div className="flex max-w-[70%] flex-col gap-1">
@@ -412,13 +531,22 @@ export function ChatSupportLogsClient() {
 														Admin
 													</span>
 												)}
+												{isUser && (
+													<span className="pl-1 text-[11px] font-medium text-muted-foreground">
+														Visitor
+													</span>
+												)}
+												{isAssistant && (
+													<span className="pr-1 text-right text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+														Bot
+													</span>
+												)}
 												<div
 													className={cn(
 														"rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
 														isAssistant &&
-															"rounded-bl-md bg-muted text-foreground",
-														isUser &&
-															"rounded-br-md bg-primary text-primary-foreground",
+															"rounded-bl-md bg-muted/70 text-foreground",
+														isUser && "rounded-bl-md bg-muted text-foreground",
 														isAdmin &&
 															"rounded-br-md bg-blue-600 text-white dark:bg-blue-700",
 													)}
@@ -430,7 +558,7 @@ export function ChatSupportLogsClient() {
 												<span
 													className={cn(
 														"text-[11px] text-muted-foreground",
-														isAssistant ? "pl-1" : "pr-1 text-right",
+														isUser ? "pl-1" : "pr-1 text-right",
 													)}
 												>
 													{formatMessageTime(message.createdAt)}
@@ -646,6 +774,49 @@ export function ChatSupportLogsClient() {
 								</div>
 							</div>
 						</ScrollArea>
+
+						{/* Delete conversation */}
+						<div className="border-t border-border/60 p-4">
+							<Button
+								variant="outline"
+								size="sm"
+								className="w-full"
+								disabled={archiveMutation.isPending}
+								onClick={() => {
+									if (selectedId) {
+										archiveMutation.mutate({
+											params: { path: { id: selectedId } },
+											body: {
+												archived: !(
+													detail?.archivedAt ?? selectedConv?.archivedAt
+												),
+											},
+										});
+									}
+								}}
+							>
+								{(detail?.archivedAt ?? selectedConv?.archivedAt) ? (
+									<>
+										<ArchiveRestore className="mr-2 h-3.5 w-3.5" />
+										Unarchive
+									</>
+								) : (
+									<>
+										<Archive className="mr-2 h-3.5 w-3.5" />
+										Archive
+									</>
+								)}
+							</Button>
+							<Button
+								variant="destructive"
+								size="sm"
+								className="w-full"
+								onClick={() => setDeleteDialogOpen(true)}
+							>
+								<Trash2 className="mr-2 h-3.5 w-3.5" />
+								Delete Conversation
+							</Button>
+						</div>
 					</>
 				) : (
 					<div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-muted-foreground">
@@ -656,6 +827,40 @@ export function ChatSupportLogsClient() {
 					</div>
 				)}
 			</div>
+
+			{/* Delete confirmation dialog */}
+			<Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Delete Conversation</DialogTitle>
+						<DialogDescription>
+							This will permanently delete the conversation and all its
+							messages. This action cannot be undone.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							onClick={() => setDeleteDialogOpen(false)}
+						>
+							Cancel
+						</Button>
+						<Button
+							variant="destructive"
+							disabled={deleteMutation.isPending}
+							onClick={() => {
+								if (selectedId) {
+									deleteMutation.mutate({
+										params: { path: { id: selectedId } },
+									});
+								}
+							}}
+						>
+							{deleteMutation.isPending ? "Deleting..." : "Delete"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

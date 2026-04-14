@@ -13,6 +13,7 @@ import {
 	eq,
 	gte,
 	inArray,
+	isNotNull,
 	isNull,
 	lt,
 	lte,
@@ -5277,6 +5278,7 @@ const contactSubmissionSchema = z.object({
 	userAgent: z.string().nullable(),
 	spamFilterStatus: z.string(),
 	rejectionReason: z.string().nullable(),
+	archivedAt: z.string().nullable(),
 });
 
 const contactSubmissionsListSchema = z.object({
@@ -5304,6 +5306,11 @@ const getContactSubmissions = createRoute({
 				.optional(),
 			sortBy: contactSubmissionsSortBySchema.default("createdAt").optional(),
 			sortOrder: sortOrderSchema.default("desc").optional(),
+			archived: z
+				.enum(["true", "false"])
+				.default("false")
+				.transform((v) => v === "true")
+				.optional(),
 		}),
 	},
 	responses: {
@@ -5326,6 +5333,7 @@ admin.openapi(getContactSubmissions, async (c) => {
 		status,
 		sortBy = "createdAt",
 		sortOrder = "desc",
+		archived = false,
 	} = c.req.valid("query");
 
 	const t = tables.enterpriseContactSubmission;
@@ -5343,8 +5351,9 @@ admin.openapi(getContactSubmissions, async (c) => {
 	if (status) {
 		conditions.push(eq(t.spamFilterStatus, status));
 	}
+	conditions.push(archived ? isNotNull(t.archivedAt) : isNull(t.archivedAt));
 
-	const where = conditions.length > 0 ? and(...conditions) : undefined;
+	const where = and(...conditions);
 
 	const sortColumn = {
 		createdAt: t.createdAt,
@@ -5369,6 +5378,7 @@ admin.openapi(getContactSubmissions, async (c) => {
 				userAgent: t.userAgent,
 				spamFilterStatus: t.spamFilterStatus,
 				rejectionReason: t.rejectionReason,
+				archivedAt: t.archivedAt,
 			})
 			.from(t)
 			.where(where)
@@ -5385,6 +5395,7 @@ admin.openapi(getContactSubmissions, async (c) => {
 		submissions: submissions.map((s) => ({
 			...s,
 			createdAt: s.createdAt.toISOString(),
+			archivedAt: s.archivedAt?.toISOString() ?? null,
 		})),
 		total: Number(countResult[0]?.count ?? 0),
 	});
@@ -5427,6 +5438,7 @@ admin.openapi(getContactSubmission, async (c) => {
 			userAgent: t.userAgent,
 			spamFilterStatus: t.spamFilterStatus,
 			rejectionReason: t.rejectionReason,
+			archivedAt: t.archivedAt,
 		})
 		.from(t)
 		.where(eq(t.id, id))
@@ -5440,6 +5452,7 @@ admin.openapi(getContactSubmission, async (c) => {
 	return c.json({
 		...submission,
 		createdAt: submission.createdAt.toISOString(),
+		archivedAt: submission.archivedAt?.toISOString() ?? null,
 	});
 });
 
@@ -5598,6 +5611,7 @@ const chatSupportConversationSchema = z.object({
 	userAgent: z.string().nullable(),
 	messageCount: z.number(),
 	escalatedAt: z.string().nullable(),
+	archivedAt: z.string().nullable(),
 	firstMessage: z.string().nullable(),
 });
 
@@ -5624,6 +5638,7 @@ const chatSupportConversationDetailSchema = z.object({
 	userAgent: z.string().nullable(),
 	messageCount: z.number(),
 	escalatedAt: z.string().nullable(),
+	archivedAt: z.string().nullable(),
 	messages: z.array(chatSupportMessageSchema),
 });
 
@@ -5635,6 +5650,11 @@ const getChatSupportConversations = createRoute({
 			limit: z.coerce.number().min(1).max(100).default(50).optional(),
 			offset: z.coerce.number().min(0).default(0).optional(),
 			search: z.string().optional(),
+			archived: z
+				.enum(["true", "false"])
+				.default("false")
+				.transform((v) => v === "true")
+				.optional(),
 		}),
 	},
 	responses: {
@@ -5650,7 +5670,12 @@ const getChatSupportConversations = createRoute({
 });
 
 admin.openapi(getChatSupportConversations, async (c) => {
-	const { limit = 50, offset = 0, search } = c.req.valid("query");
+	const {
+		limit = 50,
+		offset = 0,
+		search,
+		archived = false,
+	} = c.req.valid("query");
 
 	const t = tables.chatSupportConversation;
 	const mt = tables.chatSupportMessage;
@@ -5664,8 +5689,9 @@ admin.openapi(getChatSupportConversations, async (c) => {
 			.groupBy(mt.conversationId);
 		conditions.push(sql`${t.id} IN (${matchingConvIds})`);
 	}
+	conditions.push(archived ? isNotNull(t.archivedAt) : isNull(t.archivedAt));
 
-	const where = conditions.length > 0 ? and(...conditions) : undefined;
+	const where = and(...conditions);
 
 	const firstMessageSubquery = db
 		.select({
@@ -5688,6 +5714,7 @@ admin.openapi(getChatSupportConversations, async (c) => {
 				userAgent: t.userAgent,
 				messageCount: t.messageCount,
 				escalatedAt: t.escalatedAt,
+				archivedAt: t.archivedAt,
 				firstMessage: firstMessageSubquery.content,
 			})
 			.from(t)
@@ -5711,10 +5738,53 @@ admin.openapi(getChatSupportConversations, async (c) => {
 			createdAt: conv.createdAt.toISOString(),
 			updatedAt: conv.updatedAt.toISOString(),
 			escalatedAt: conv.escalatedAt?.toISOString() ?? null,
+			archivedAt: conv.archivedAt?.toISOString() ?? null,
 			firstMessage: conv.firstMessage ?? null,
 		})),
 		total: Number(countResult[0]?.count ?? 0),
 	});
+});
+
+const getChatSupportReadStatuses = createRoute({
+	method: "get",
+	path: "/chat-support-logs/read-statuses",
+	responses: {
+		200: {
+			content: {
+				"application/json": {
+					schema: z.object({
+						readStatuses: z.record(z.string(), z.number()),
+					}),
+				},
+			},
+			description:
+				"Map of conversationId to lastReadMessageCount for the current admin.",
+		},
+	},
+});
+
+admin.openapi(getChatSupportReadStatuses, async (c) => {
+	const user = c.get("user");
+
+	if (!user) {
+		throw new HTTPException(401, { message: "Unauthorized" });
+	}
+
+	const rt = tables.chatSupportReadStatus;
+	const rows = await db
+		.select({
+			conversationId: rt.conversationId,
+			lastReadMessageCount: rt.lastReadMessageCount,
+		})
+		.from(rt)
+		.where(eq(rt.adminUserId, user.id));
+
+	const readStatuses: Record<string, number> = {};
+	for (const row of rows) {
+		readStatuses[row.conversationId] = row.lastReadMessageCount;
+	}
+
+	return c.json({ readStatuses });
 });
 
 const getChatSupportConversation = createRoute({
@@ -5755,6 +5825,7 @@ admin.openapi(getChatSupportConversation, async (c) => {
 			userAgent: t.userAgent,
 			messageCount: t.messageCount,
 			escalatedAt: t.escalatedAt,
+			archivedAt: t.archivedAt,
 		})
 		.from(t)
 		.where(eq(t.id, id))
@@ -5782,6 +5853,7 @@ admin.openapi(getChatSupportConversation, async (c) => {
 		createdAt: conversation.createdAt.toISOString(),
 		updatedAt: conversation.updatedAt.toISOString(),
 		escalatedAt: conversation.escalatedAt?.toISOString() ?? null,
+		archivedAt: conversation.archivedAt?.toISOString() ?? null,
 		messages: messages.map((m) => ({
 			...m,
 			createdAt: m.createdAt.toISOString(),
@@ -5913,6 +5985,247 @@ admin.openapi(replyChatSupportConversation, async (c) => {
 	}
 
 	return c.json({ success: true, message: "Reply sent successfully." });
+});
+
+// ── Chat Support Read Status ──────────────────────────────────────────────────
+
+const markChatSupportRead = createRoute({
+	method: "post",
+	path: "/chat-support-logs/{id}/read",
+	request: {
+		params: z.object({ id: z.string() }),
+		body: {
+			content: {
+				"application/json": {
+					schema: z.object({
+						messageCount: z.number().int().min(0),
+					}),
+				},
+			},
+		},
+	},
+	responses: {
+		200: {
+			content: {
+				"application/json": {
+					schema: z.object({ success: z.boolean() }),
+				},
+			},
+			description: "Conversation marked as read.",
+		},
+	},
+});
+
+admin.openapi(markChatSupportRead, async (c) => {
+	const { id } = c.req.valid("param");
+	const { messageCount } = c.req.valid("json");
+	const user = c.get("user");
+
+	if (!user) {
+		throw new HTTPException(401, { message: "Unauthorized" });
+	}
+
+	const rt = tables.chatSupportReadStatus;
+
+	const existing = await db
+		.select({ id: rt.id })
+		.from(rt)
+		.where(and(eq(rt.conversationId, id), eq(rt.adminUserId, user.id)))
+		.limit(1);
+
+	if (existing.length > 0) {
+		await db
+			.update(rt)
+			.set({
+				lastReadMessageCount: sql<number>`GREATEST(${rt.lastReadMessageCount}, ${messageCount})`,
+				readAt: sql<Date>`CASE WHEN ${messageCount} >= ${rt.lastReadMessageCount} THEN NOW() ELSE ${rt.readAt} END`,
+			})
+			.where(eq(rt.id, existing[0]!.id));
+	} else {
+		await db.insert(rt).values({
+			conversationId: id,
+			adminUserId: user.id,
+			lastReadMessageCount: messageCount,
+		});
+	}
+
+	return c.json({ success: true });
+});
+
+// ── Delete Chat Support Conversation ──────────────────────────────────────────
+
+const deleteChatSupportConversation = createRoute({
+	method: "delete",
+	path: "/chat-support-logs/{id}",
+	request: {
+		params: z.object({ id: z.string() }),
+	},
+	responses: {
+		200: {
+			content: {
+				"application/json": {
+					schema: z.object({ success: z.boolean() }).openapi({}),
+				},
+			},
+			description: "Conversation deleted.",
+		},
+		404: {
+			description: "Conversation not found.",
+		},
+	},
+});
+
+admin.openapi(deleteChatSupportConversation, async (c) => {
+	const { id } = c.req.valid("param");
+
+	const existing = await db.query.chatSupportConversation.findFirst({
+		where: { id: { eq: id } },
+	});
+
+	if (!existing) {
+		throw new HTTPException(404, { message: "Conversation not found" });
+	}
+
+	await db
+		.delete(tables.chatSupportConversation)
+		.where(eq(tables.chatSupportConversation.id, id));
+
+	return c.json({ success: true });
+});
+
+// ── Delete Contact Submission ─────────────────────────────────────────────────
+
+const deleteContactSubmission = createRoute({
+	method: "delete",
+	path: "/contact-submissions/{id}",
+	request: {
+		params: z.object({ id: z.string() }),
+	},
+	responses: {
+		200: {
+			content: {
+				"application/json": {
+					schema: z.object({ success: z.boolean() }).openapi({}),
+				},
+			},
+			description: "Submission deleted.",
+		},
+		404: {
+			description: "Submission not found.",
+		},
+	},
+});
+
+admin.openapi(deleteContactSubmission, async (c) => {
+	const { id } = c.req.valid("param");
+
+	const existing = await db.query.enterpriseContactSubmission.findFirst({
+		where: { id: { eq: id } },
+	});
+
+	if (!existing) {
+		throw new HTTPException(404, { message: "Submission not found" });
+	}
+
+	await db
+		.delete(tables.enterpriseContactSubmission)
+		.where(eq(tables.enterpriseContactSubmission.id, id));
+
+	return c.json({ success: true });
+});
+
+// ── Archive Contact Submission ────────────────────────────────────────────────
+
+const archiveContactSubmission = createRoute({
+	method: "patch",
+	path: "/contact-submissions/{id}/archive",
+	request: {
+		params: z.object({ id: z.string() }),
+		body: {
+			content: {
+				"application/json": {
+					schema: z.object({ archived: z.boolean() }),
+				},
+			},
+		},
+	},
+	responses: {
+		200: {
+			content: {
+				"application/json": {
+					schema: z.object({ success: z.boolean() }).openapi({}),
+				},
+			},
+			description: "Submission archived/unarchived.",
+		},
+		404: {
+			description: "Submission not found.",
+		},
+	},
+});
+
+admin.openapi(archiveContactSubmission, async (c) => {
+	const { id } = c.req.valid("param");
+	const { archived } = c.req.valid("json");
+
+	const rows = await db
+		.update(tables.enterpriseContactSubmission)
+		.set({ archivedAt: archived ? new Date() : null })
+		.where(eq(tables.enterpriseContactSubmission.id, id))
+		.returning();
+
+	if (rows.length === 0) {
+		throw new HTTPException(404, { message: "Submission not found" });
+	}
+
+	return c.json({ success: true });
+});
+
+// ── Archive Chat Support Conversation ────────────────────────────────────────
+
+const archiveChatSupportConversation = createRoute({
+	method: "patch",
+	path: "/chat-support-logs/{id}/archive",
+	request: {
+		params: z.object({ id: z.string() }),
+		body: {
+			content: {
+				"application/json": {
+					schema: z.object({ archived: z.boolean() }),
+				},
+			},
+		},
+	},
+	responses: {
+		200: {
+			content: {
+				"application/json": {
+					schema: z.object({ success: z.boolean() }).openapi({}),
+				},
+			},
+			description: "Conversation archived/unarchived.",
+		},
+		404: {
+			description: "Conversation not found.",
+		},
+	},
+});
+
+admin.openapi(archiveChatSupportConversation, async (c) => {
+	const { id } = c.req.valid("param");
+	const { archived } = c.req.valid("json");
+
+	const rows = await db
+		.update(tables.chatSupportConversation)
+		.set({ archivedAt: archived ? new Date() : null })
+		.where(eq(tables.chatSupportConversation.id, id))
+		.returning();
+
+	if (rows.length === 0) {
+		throw new HTTPException(404, { message: "Conversation not found" });
+	}
+
+	return c.json({ success: true });
 });
 
 export default admin;

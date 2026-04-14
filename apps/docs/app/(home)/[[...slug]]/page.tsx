@@ -62,12 +62,8 @@ export default async function Page(props: {
 			repo: "llmgateway",
 			path: `apps/docs/content/${page.path}`,
 		});
-	} catch (error: unknown) {
-		const message = error instanceof Error ? error.message : String(error);
-		const isRateLimit = message.includes("rate limit");
-		if (!isRateLimit) {
-			throw error;
-		}
+	} catch {
+		// Ignore errors (rate limits, network issues, missing auth in Docker builds)
 	}
 
 	const MDXContent = page.data.body;

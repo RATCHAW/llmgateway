@@ -656,6 +656,8 @@ export const alibabaModels = [
 			{
 				providerId: "nebius",
 				modelName: "Qwen/Qwen2.5-Coder-7B-fast",
+				// Model removed from Nebius API
+				deactivatedAt: new Date("2026-04-14"),
 				inputPrice: 0.01 / 1e6,
 				outputPrice: 0.03 / 1e6,
 				requestPrice: 0,

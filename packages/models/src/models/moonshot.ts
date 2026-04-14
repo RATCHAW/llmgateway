@@ -71,6 +71,8 @@ export const moonshotModels = [
 			{
 				providerId: "nebius",
 				modelName: "moonshotai/Kimi-K2-Instruct",
+				// Model removed from Nebius API; only Kimi-K2.5 is available
+				deactivatedAt: new Date("2026-04-14"),
 				inputPrice: 0.5 / 1e6,
 				outputPrice: 2.4 / 1e6,
 				requestPrice: 0,

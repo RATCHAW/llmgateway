@@ -1,3 +1,5 @@
+import { mapFinishReasonToOpenai } from "./map-finish-reason-to-openai.js";
+
 import type { RoutingAttempt } from "./retry-with-fallback.js";
 import type { Annotation, ImageObject } from "./types.js";
 import type { Provider } from "@llmgateway/models";
@@ -107,7 +109,11 @@ function buildUsageObject(
 	cachedTokens: number | null,
 	costs: CostData | null,
 	showUpgradeMessage = false,
+	cacheCreationTokens: number | null = null,
 ) {
+	const hasCacheRead = cachedTokens !== null;
+	const hasCacheCreation =
+		cacheCreationTokens !== null && cacheCreationTokens > 0;
 	return {
 		prompt_tokens: Math.max(1, promptTokens ?? 1),
 		completion_tokens: completionTokens ?? 0,
@@ -119,9 +125,12 @@ function buildUsageObject(
 		...(reasoningTokens !== null && {
 			reasoning_tokens: reasoningTokens,
 		}),
-		...(cachedTokens !== null && {
+		...((hasCacheRead || hasCacheCreation) && {
 			prompt_tokens_details: {
-				cached_tokens: cachedTokens,
+				cached_tokens: cachedTokens ?? 0,
+				...(hasCacheCreation && {
+					cache_creation_tokens: cacheCreationTokens,
+				}),
 			},
 		}),
 		...(costs !== null && {
@@ -166,6 +175,7 @@ export function transformResponseToOpenai(
 	routing: RoutingAttempt[] | null = null,
 	requestId = "",
 	usedRegion?: string | undefined,
+	cacheCreationTokens: number | null = null,
 ) {
 	let transformedResponse = json;
 
@@ -193,28 +203,11 @@ export function transformResponseToOpenai(
 							...(images && images.length > 0 && { images }),
 							...(annotations && annotations.length > 0 && { annotations }),
 						},
-						finish_reason: (() => {
-							// Map Google finish reasons to OpenAI format for the response
-							if (!finishReason) {
-								return "stop";
-							}
-							if (finishReason === "STOP") {
-								return toolResults ? "tool_calls" : "stop";
-							}
-							if (finishReason === "MAX_TOKENS") {
-								return "length";
-							}
-							if (
-								finishReason === "SAFETY" ||
-								finishReason === "PROHIBITED_CONTENT" ||
-								finishReason === "RECITATION" ||
-								finishReason === "BLOCKLIST" ||
-								finishReason === "SPII"
-							) {
-								return "content_filter";
-							}
-							return "stop";
-						})(),
+						finish_reason: mapFinishReasonToOpenai(
+							finishReason,
+							usedProvider,
+							!!toolResults,
+						),
 					},
 				],
 				usage: buildUsageObject(
@@ -225,6 +218,7 @@ export function transformResponseToOpenai(
 					cachedTokens,
 					costs,
 					showUpgradeMessage,
+					cacheCreationTokens,
 				),
 				metadata: buildMetadata(
 					requestedModel,
@@ -257,14 +251,11 @@ export function transformResponseToOpenai(
 							...(toolResults && { tool_calls: toolResults }),
 							...(annotations && annotations.length > 0 && { annotations }),
 						},
-						finish_reason:
-							finishReason === "end_turn"
-								? "stop"
-								: finishReason === "tool_use"
-									? "tool_calls"
-									: finishReason === "max_tokens"
-										? "length"
-										: "stop",
+						finish_reason: mapFinishReasonToOpenai(
+							finishReason,
+							usedProvider,
+							!!toolResults,
+						),
 					},
 				],
 				usage: buildUsageObject(
@@ -275,6 +266,7 @@ export function transformResponseToOpenai(
 					cachedTokens,
 					costs,
 					showUpgradeMessage,
+					cacheCreationTokens,
 				),
 				metadata: buildMetadata(
 					requestedModel,
@@ -319,6 +311,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,
@@ -413,6 +406,7 @@ export function transformResponseToOpenai(
 					cachedTokens,
 					costs,
 					showUpgradeMessage,
+					cacheCreationTokens,
 				),
 				metadata: buildMetadata(
 					requestedModel,
@@ -455,6 +449,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,
@@ -553,6 +548,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,
@@ -652,6 +648,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,
@@ -742,6 +739,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,
@@ -833,6 +831,7 @@ export function transformResponseToOpenai(
 						cachedTokens,
 						costs,
 						showUpgradeMessage,
+						cacheCreationTokens,
 					),
 					metadata: buildMetadata(
 						requestedModel,

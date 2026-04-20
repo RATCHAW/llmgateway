@@ -45,6 +45,7 @@ export function extractTokenUsage(
 	let totalTokens = null;
 	let reasoningTokens = null;
 	let cachedTokens = null;
+	let cacheCreationTokens = null;
 
 	switch (provider) {
 		case "google-ai-studio":
@@ -110,6 +111,7 @@ export function extractTokenUsage(
 				completionTokens = data.usage.outputTokens ?? null;
 				// Cached tokens are the tokens read from cache (discount applies to these)
 				cachedTokens = cacheReadTokens;
+				cacheCreationTokens = cacheWriteTokens;
 				totalTokens = data.usage.totalTokens ?? null;
 			}
 			break;
@@ -118,15 +120,16 @@ export function extractTokenUsage(
 				// For Anthropic: input_tokens are the non-cached tokens
 				// We need to add cache_creation_input_tokens to get total input tokens
 				const inputTokens = data.usage.input_tokens ?? 0;
-				const cacheCreationTokens = data.usage.cache_creation_input_tokens ?? 0;
+				const cacheCreation = data.usage.cache_creation_input_tokens ?? 0;
 				const cacheReadTokens = data.usage.cache_read_input_tokens ?? 0;
 
 				// Total prompt tokens = non-cached + cache creation + cache read
-				promptTokens = inputTokens + cacheCreationTokens + cacheReadTokens;
+				promptTokens = inputTokens + cacheCreation + cacheReadTokens;
 				completionTokens = data.usage.output_tokens ?? null;
 				reasoningTokens = data.usage.reasoning_output_tokens ?? null;
 				// Cached tokens are the tokens read from cache (discount applies to these)
 				cachedTokens = cacheReadTokens;
+				cacheCreationTokens = cacheCreation;
 				totalTokens = (promptTokens ?? 0) + (completionTokens ?? 0);
 			}
 			break;
@@ -157,5 +160,6 @@ export function extractTokenUsage(
 		totalTokens,
 		reasoningTokens,
 		cachedTokens,
+		cacheCreationTokens,
 	};
 }

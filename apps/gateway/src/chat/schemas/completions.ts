@@ -19,6 +19,11 @@ export const completionsRequestSchema = z.object({
 							z.object({
 								type: z.literal("text"),
 								text: z.string(),
+								cache_control: z
+									.object({
+										type: z.literal("ephemeral"),
+									})
+									.optional(),
 							}),
 							z.object({
 								type: z.literal("image_url"),

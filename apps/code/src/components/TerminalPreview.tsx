@@ -65,19 +65,9 @@ const snippets: Record<
 		modelLine: { key: "OPENAI_MODEL=", value: "claude-opus-4-6" },
 	},
 	opencode: {
-		lines: [
-			{
-				key: "OPENAI_BASE_URL=",
-				value: "https://api.llmgateway.io/v1",
-			},
-			{
-				key: "OPENAI_API_KEY=",
-				value: "llmgtwy_your_key",
-			},
-		],
+		lines: [],
 		command: "opencode",
-		comment: "# works with any model — switch freely",
-		modelLine: { key: "OPENAI_MODEL=", value: "claude-sonnet-4-20250514" },
+		comment: "# LLM Gateway is built-in — type /providers to connect",
 	},
 	cline: {
 		lines: [

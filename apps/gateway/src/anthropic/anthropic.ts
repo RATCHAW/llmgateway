@@ -143,6 +143,12 @@ const anthropicResponseSchema = z.object({
 	usage: z.object({
 		input_tokens: z.number(),
 		output_tokens: z.number(),
+		// Anthropic emits these on caching-supported models, but we keep them
+		// optional with a 0 default so the schema doesn't fail validation if an
+		// older Claude model, a beta endpoint, or a future API change ever omits
+		// them. The downstream conversion code already handles 0 correctly.
+		cache_creation_input_tokens: z.number().optional().default(0),
+		cache_read_input_tokens: z.number().optional().default(0),
 	}),
 });
 
@@ -207,21 +213,40 @@ anthropic.openapi(messages, async (c) => {
 	// Transform Anthropic request to OpenAI format
 	const openaiMessages: Array<Record<string, unknown>> = [];
 
-	// Add system message if provided
+	// Add system message if provided.
+	// When the caller supplies cache_control on any text block, preserve the
+	// per-block array form so the inner /v1/chat/completions path can forward
+	// cache_control markers verbatim to Anthropic. Otherwise, join with " " to
+	// preserve the legacy behavior (and matching token counts) for callers
+	// that pass array-form system without caching opt-in.
 	if (anthropicRequest.system) {
-		let systemContent: string;
 		if (typeof anthropicRequest.system === "string") {
-			systemContent = anthropicRequest.system;
+			openaiMessages.push({
+				role: "system",
+				content: anthropicRequest.system,
+			});
 		} else {
-			// Handle array format - concatenate all text blocks
-			systemContent = anthropicRequest.system
-				.map((block) => block.text)
-				.join(" ");
+			const hasAnyCacheControl = anthropicRequest.system.some(
+				(block) => block.cache_control,
+			);
+			if (hasAnyCacheControl) {
+				openaiMessages.push({
+					role: "system",
+					content: anthropicRequest.system.map((block) => ({
+						type: "text",
+						text: block.text,
+						...(block.cache_control && {
+							cache_control: block.cache_control,
+						}),
+					})),
+				});
+			} else {
+				openaiMessages.push({
+					role: "system",
+					content: anthropicRequest.system.map((block) => block.text).join(" "),
+				});
+			}
 		}
-		openaiMessages.push({
-			role: "system",
-			content: systemContent,
-		});
 	}
 
 	// Transform messages using the approach from claude-code-proxy
@@ -372,9 +397,13 @@ anthropic.openapi(messages, async (c) => {
 			const hasOnlyText = message.content.every(
 				(block) => block.type === "text",
 			);
+			const hasAnyCacheControl = message.content.some(
+				(block) => block.type === "text" && block.cache_control,
+			);
 
-			if (hasOnlyText) {
-				// For text-only content, flatten to a simple string to avoid content type issues
+			if (hasOnlyText && !hasAnyCacheControl) {
+				// For text-only content with no cache markers, flatten to a simple
+				// string to avoid content type issues.
 				const textContent = message.content
 					.filter((block) => block.type === "text")
 					.map((block) => block.text)
@@ -385,10 +414,18 @@ anthropic.openapi(messages, async (c) => {
 					content: textContent,
 				});
 			} else {
-				// For true multi-modal content, transform blocks
+				// For multi-modal content, or text content with cache_control markers,
+				// transform blocks while preserving cache_control so the inner
+				// completions path can forward it to Anthropic.
 				const content = message.content.map((block) => {
 					if (block.type === "text" && block.text) {
-						return { type: "text", text: block.text };
+						return {
+							type: "text",
+							text: block.text,
+							...(block.cache_control && {
+								cache_control: block.cache_control,
+							}),
+						};
 					}
 					if (block.type === "image" && block.source) {
 						return {
@@ -498,7 +535,17 @@ anthropic.openapi(messages, async (c) => {
 					name?: string;
 					input?: string;
 				}> = [];
-				let usage = { input_tokens: 0, output_tokens: 0 };
+				let usage: {
+					input_tokens: number;
+					output_tokens: number;
+					cache_creation_input_tokens: number;
+					cache_read_input_tokens: number;
+				} = {
+					input_tokens: 0,
+					output_tokens: 0,
+					cache_creation_input_tokens: 0,
+					cache_read_input_tokens: 0,
+				};
 				let currentTextBlockIndex: number | null = null;
 				const toolCallBlockIndex = new Map<number, number>();
 
@@ -556,7 +603,12 @@ anthropic.openapi(messages, async (c) => {
 												content: [],
 												stop_reason: null,
 												stop_sequence: null,
-												usage: { input_tokens: 0, output_tokens: 0 },
+												usage: {
+													input_tokens: 0,
+													output_tokens: 0,
+													cache_creation_input_tokens: 0,
+													cache_read_input_tokens: 0,
+												},
 											},
 										}),
 										event: "message_start",
@@ -694,9 +746,23 @@ anthropic.openapi(messages, async (c) => {
 
 									// Update usage if available
 									if (chunk.usage) {
+										const promptDetails =
+											chunk.usage.prompt_tokens_details ?? {};
+										const cacheRead: number = promptDetails.cached_tokens ?? 0;
+										const cacheCreation: number =
+											promptDetails.cache_creation_tokens ?? 0;
+										const totalPrompt: number = chunk.usage.prompt_tokens ?? 0;
+										const nonCachedInput = Math.max(
+											0,
+											totalPrompt - cacheRead - cacheCreation,
+										);
 										usage = {
-											input_tokens: chunk.usage.prompt_tokens ?? 0,
+											input_tokens: nonCachedInput,
 											output_tokens: chunk.usage.completion_tokens ?? 0,
+											// Match Anthropic's API and always emit both fields
+											// (set to 0 when inapplicable).
+											cache_creation_input_tokens: cacheCreation,
+											cache_read_input_tokens: cacheRead,
 										};
 									}
 
@@ -787,6 +853,15 @@ anthropic.openapi(messages, async (c) => {
 		}
 	}
 
+	const usageDetails = openaiResponse.usage?.prompt_tokens_details ?? {};
+	const cachedTokens: number = usageDetails.cached_tokens ?? 0;
+	const cacheCreationTokens: number = usageDetails.cache_creation_tokens ?? 0;
+	const totalPromptTokens: number = openaiResponse.usage?.prompt_tokens ?? 0;
+	const nonCachedInputTokens = Math.max(
+		0,
+		totalPromptTokens - cachedTokens - cacheCreationTokens,
+	);
+
 	const anthropicResponse = {
 		id: openaiResponse.id,
 		type: "message" as const,
@@ -798,8 +873,13 @@ anthropic.openapi(messages, async (c) => {
 		),
 		stop_sequence: null,
 		usage: {
-			input_tokens: openaiResponse.usage?.prompt_tokens ?? 0,
+			input_tokens: nonCachedInputTokens,
 			output_tokens: openaiResponse.usage?.completion_tokens ?? 0,
+			// Match Anthropic's actual API: always emit both fields (set to 0
+			// when inapplicable) so SDK clients with strict typing can read them
+			// without optionality checks.
+			cache_creation_input_tokens: cacheCreationTokens,
+			cache_read_input_tokens: cachedTokens,
 		},
 	};
 

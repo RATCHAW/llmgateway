@@ -70,7 +70,7 @@ interface ModelSelectorProps {
 	value?: string;
 	onValueChange?: (value: string) => void;
 	placeholder?: string;
-	mode?: "chat" | "video";
+	mode?: "chat" | "video" | "image";
 	isOptionDisabled?: (value: string) => boolean;
 	getOptionDisabledReason?: (value: string) => string | undefined;
 }
@@ -385,6 +385,100 @@ function formatPerSecondPrice(perSecondPrice: Record<string, string>): string {
 	}
 	const firstValue = Object.values(perSecondPrice)[0];
 	return firstValue ? `$${firstValue}/sec` : "Unknown";
+}
+
+// Estimate cost for generating one typical 1K/1024x1024 image based on
+// request fee + image output tokens * price.
+function estimateImageCost(
+	mapping: ApiModelProviderMapping | undefined,
+): { base: number; discounted: number } | null {
+	if (!mapping) {
+		return null;
+	}
+	const request = mapping.requestPrice ? parseFloat(mapping.requestPrice) : 0;
+	const imageOut = mapping.imageOutputPrice
+		? parseFloat(mapping.imageOutputPrice)
+		: 0;
+	const tokensMap = mapping.imageOutputTokensByResolution;
+	const tokens =
+		tokensMap?.default ?? tokensMap?.["1024x1024"] ?? tokensMap?.["1K"];
+	if (tokens === undefined) {
+		return null;
+	}
+	const outputCost = imageOut * tokens;
+	const base = request + outputCost;
+	if (!Number.isFinite(base) || base <= 0) {
+		return null;
+	}
+	const discount = mapping.discount ? parseFloat(mapping.discount) : 0;
+	const discounted = discount > 0 ? base * (1 - discount) : base;
+	return { base, discounted };
+}
+
+function getMinImageCostEstimate(
+	mappings: ApiModelProviderMapping[],
+): { base: number; discounted: number } | null {
+	const now = new Date();
+	let best: { base: number; discounted: number } | null = null;
+	for (const m of mappings) {
+		const isDeactivated = m.deactivatedAt && new Date(m.deactivatedAt) <= now;
+		if (isDeactivated) {
+			continue;
+		}
+		const est = estimateImageCost(m);
+		if (!est) {
+			continue;
+		}
+		if (!best || est.discounted < best.discounted) {
+			best = est;
+		}
+	}
+	return best;
+}
+
+function formatImageCost(cost: number): string {
+	if (cost >= 0.01) {
+		return `$${cost.toFixed(3)}`;
+	}
+	if (cost >= 0.001) {
+		return `$${cost.toFixed(4)}`;
+	}
+	return `$${cost.toFixed(5)}`;
+}
+
+function ImageEstimateCard({
+	estimate,
+	labelClassName,
+	valueClassName,
+	captionClassName,
+}: {
+	estimate: { base: number; discounted: number };
+	labelClassName?: string;
+	valueClassName?: string;
+	captionClassName?: string;
+}) {
+	return (
+		<div className="rounded-md border border-primary/30 bg-primary/5 p-2.5">
+			<span
+				className={
+					labelClassName ??
+					"text-[11px] font-medium text-muted-foreground uppercase tracking-wide"
+				}
+			>
+				Est. per Image
+			</span>
+			<p
+				className={
+					valueClassName ?? "text-sm font-mono font-semibold text-primary"
+				}
+			>
+				~{formatImageCost(estimate.discounted)}
+			</p>
+			<p className={captionClassName ?? "text-[10px] text-muted-foreground"}>
+				Typical 1024×1024 output
+			</p>
+		</div>
+	);
 }
 
 function getMinPerSecondPrice(
@@ -755,7 +849,14 @@ export function ModelSelector({
 					}
 				: null,
 		);
-	}, [open, selectedModel, selectedProviderId, allEntries, filteredEntries]);
+	}, [
+		open,
+		selectedModel,
+		selectedProviderId,
+		selectedMapping,
+		allEntries,
+		filteredEntries,
+	]);
 
 	return (
 		<>
@@ -1340,19 +1441,30 @@ export function ModelSelector({
 															aggregate.minImageInputPrice !== undefined ||
 															aggregate.minImageOutputPrice !== undefined);
 
+													const imageEstimate =
+														mode === "image"
+															? getMinImageCostEstimate(
+																	previewEntry.model.mappings,
+																)
+															: null;
+
 													const hasCapabilities =
 														aggregate.capabilities.length > 0;
 
 													if (
 														!hasPricingOrLimits &&
 														!hasImagePricing &&
-														!hasCapabilities
+														!hasCapabilities &&
+														!imageEstimate
 													) {
 														return null;
 													}
 
 													return (
 														<div className="space-y-3 pt-3 border-t border-dashed">
+															{imageEstimate && (
+																<ImageEstimateCard estimate={imageEstimate} />
+															)}
 															{hasPricingOrLimits &&
 																(isVideo ? (
 																	<div className="space-y-2">
@@ -1663,6 +1775,28 @@ export function ModelSelector({
 															</div>
 														</div>
 													)}
+													{mode === "image" &&
+														(() => {
+															const est = estimateImageCost(
+																previewEntry.mapping,
+															);
+															if (!est) {
+																return null;
+															}
+															return (
+																<div className="pt-2 mt-2 rounded-md border border-primary/30 bg-primary/5 p-2.5">
+																	<span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+																		Est. per Image
+																	</span>
+																	<p className="text-sm font-mono font-semibold text-primary">
+																		~{formatImageCost(est.discounted)}
+																	</p>
+																	<p className="text-[10px] text-muted-foreground">
+																		Typical 1024×1024 output
+																	</p>
+																</div>
+															);
+														})()}
 													{/* Image Generation Pricing */}
 													{(previewEntry.mapping?.requestPrice ??
 														previewEntry.mapping?.imageInputPrice) && (
@@ -1859,6 +1993,10 @@ export function ModelSelector({
 												selectedDetails.model,
 											);
 
+											const imageEstimate = getMinImageCostEstimate(
+												selectedDetails.model.mappings,
+											);
+
 											const hasPricingOrLimits =
 												aggregate.minInputPrice !== undefined ||
 												aggregate.minOutputPrice !== undefined ||
@@ -1876,13 +2014,17 @@ export function ModelSelector({
 											if (
 												!hasPricingOrLimits &&
 												!hasImagePricing &&
-												!hasCapabilities
+												!hasCapabilities &&
+												!imageEstimate
 											) {
 												return null;
 											}
 
 											return (
 												<div className="space-y-4">
+													{imageEstimate && (
+														<ImageEstimateCard estimate={imageEstimate} />
+													)}
 													{hasPricingOrLimits && (
 														<div className="space-y-3">
 															<h5 className="font-medium text-sm">
@@ -2010,6 +2152,15 @@ export function ModelSelector({
 												<Separator />
 											</>
 										)}
+
+										{(() => {
+											const imageEstimate = selectedDetails.mapping
+												? estimateImageCost(selectedDetails.mapping)
+												: null;
+											return imageEstimate ? (
+												<ImageEstimateCard estimate={imageEstimate} />
+											) : null;
+										})()}
 
 										<div className="space-y-3">
 											<h5 className="font-medium text-sm">Pricing & Limits</h5>

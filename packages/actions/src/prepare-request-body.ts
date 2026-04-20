@@ -5,6 +5,7 @@ import {
 	type ProviderId,
 	type BaseMessage,
 	type FunctionParameter,
+	isTextContent,
 	type OpenAIFunctionToolInput,
 	type OpenAIRequestBody,
 	type OpenAIResponsesRequestBody,
@@ -772,6 +773,38 @@ export async function prepareRequestBody(
 		processedMessages = transformMessagesForNoSystemRole(messages);
 	}
 
+	// Strip Anthropic-style cache_control markers from text content parts when
+	// the resolved provider doesn't natively understand them. The Anthropic and
+	// AWS Bedrock branches below transform/forward cache_control on their own;
+	// every other provider receives the raw `processedMessages` and would
+	// otherwise pass an unknown field through to OpenAI/Google/etc., risking a
+	// 400 from strict providers and confusing logs from lenient ones.
+	const providerHandlesCacheControl =
+		usedProvider === "anthropic" || usedProvider === "aws-bedrock";
+	if (!providerHandlesCacheControl) {
+		processedMessages = processedMessages.map((m) => {
+			if (!Array.isArray(m.content)) {
+				return m;
+			}
+			let mutated = false;
+			const newContent = m.content.map((part) => {
+				const asRecord = part as unknown as Record<string, unknown>;
+				if (
+					asRecord &&
+					typeof asRecord === "object" &&
+					asRecord.type === "text" &&
+					asRecord.cache_control !== undefined
+				) {
+					mutated = true;
+					const { cache_control: _ignored, ...rest } = asRecord;
+					return rest as unknown as typeof part;
+				}
+				return part;
+			});
+			return mutated ? { ...m, content: newContent } : m;
+		});
+	}
+
 	// Start with a base structure that can be modified for each provider
 	const requestBody: any = {
 		model: usedModel,
@@ -1134,41 +1167,84 @@ export async function prepareRequestBody(
 					cache_control?: { type: "ephemeral" };
 				}> = [];
 
-				for (const sysMsg of systemMessages) {
-					let text: string;
-					if (typeof sysMsg.content === "string") {
-						text = sysMsg.content;
-					} else if (Array.isArray(sysMsg.content)) {
-						// Concatenate text from array content
-						text = sysMsg.content
-							.filter((c) => c.type === "text" && "text" in c)
-							.map((c) => (c as { type: "text"; text: string }).text)
-							.join("");
-					} else {
-						continue;
+				// Detect whether any text block in the incoming system messages has
+				// a caller-supplied cache_control marker. If so, we preserve the
+				// per-block structure so we can forward markers verbatim. Otherwise
+				// we fall back to the legacy behavior of concatenating each system
+				// message's text into a single block (and applying the length-based
+				// heuristic per concatenated block).
+				const callerSetCacheControl = systemMessages.some((sysMsg) => {
+					if (!Array.isArray(sysMsg.content)) {
+						return false;
 					}
+					return sysMsg.content.some(
+						(c) => isTextContent(c) && !!c.cache_control,
+					);
+				});
 
-					if (!text || text.trim() === "") {
-						continue;
+				if (callerSetCacheControl) {
+					for (const sysMsg of systemMessages) {
+						if (typeof sysMsg.content === "string") {
+							if (!sysMsg.content.trim()) {
+								continue;
+							}
+							systemContent.push({ type: "text", text: sysMsg.content });
+						} else if (Array.isArray(sysMsg.content)) {
+							for (const part of sysMsg.content) {
+								if (!isTextContent(part) || !part.text || !part.text.trim()) {
+									continue;
+								}
+								const explicit = part.cache_control;
+								if (explicit) {
+									if (systemCacheControlCount < maxCacheControlBlocks) {
+										systemCacheControlCount++;
+										systemContent.push({
+											type: "text",
+											text: part.text,
+											cache_control: explicit,
+										});
+									} else {
+										systemContent.push({ type: "text", text: part.text });
+									}
+								} else {
+									systemContent.push({ type: "text", text: part.text });
+								}
+							}
+						}
 					}
+				} else {
+					for (const sysMsg of systemMessages) {
+						let text: string;
+						if (typeof sysMsg.content === "string") {
+							text = sysMsg.content;
+						} else if (Array.isArray(sysMsg.content)) {
+							// Concatenate text from array content (legacy behavior).
+							text = sysMsg.content
+								.filter((c) => c.type === "text" && "text" in c)
+								.map((c) => (c as { type: "text"; text: string }).text)
+								.join("");
+						} else {
+							continue;
+						}
 
-					// Add cache_control for text blocks exceeding the model's minimum cacheable threshold
-					const shouldCache =
-						text.length >= minCacheableChars &&
-						systemCacheControlCount < maxCacheControlBlocks;
+						if (!text || text.trim() === "") {
+							continue;
+						}
 
-					if (shouldCache) {
-						systemCacheControlCount++;
-						systemContent.push({
-							type: "text",
-							text,
-							cache_control: { type: "ephemeral" },
-						});
-					} else {
-						systemContent.push({
-							type: "text",
-							text,
-						});
+						const shouldCache =
+							text.length >= minCacheableChars &&
+							systemCacheControlCount < maxCacheControlBlocks;
+
+						if (shouldCache) {
+							systemCacheControlCount++;
+							systemContent.push({
+								type: "text",
+								text,
+								cache_control: { type: "ephemeral" },
+							});
+						} else {
+							systemContent.push({ type: "text", text });
+						}
 					}
 				}
 
@@ -1247,10 +1323,38 @@ export async function prepareRequestBody(
 
 			// Enable thinking for reasoning-capable Anthropic models when reasoning_effort or reasoning_max_tokens is specified
 			if (supportsReasoning && (reasoning_effort || reasoning_max_tokens)) {
-				requestBody.thinking = {
-					type: "enabled",
-					budget_tokens: thinkingBudget,
-				};
+				if (providerMapping?.reasoningMode === "adaptive") {
+					// Opus 4.7+ uses adaptive thinking: `thinking: { type: "adaptive" }` with
+					// `output_config.effort` controlling depth. `budget_tokens` is rejected.
+					// The model decides whether to engage thinking based on prompt complexity.
+					requestBody.thinking = { type: "adaptive" };
+					if (effort === undefined && reasoning_effort) {
+						const mapEffort = (
+							e: typeof reasoning_effort,
+						): "low" | "medium" | "high" | "xhigh" | "max" => {
+							switch (e) {
+								case "minimal":
+								case "low":
+									return "low";
+								case "medium":
+									return "medium";
+								case "high":
+									return "high";
+								case "xhigh":
+									return "xhigh";
+								default:
+									return "high";
+							}
+						};
+						requestBody.output_config ??= {};
+						requestBody.output_config.effort = mapEffort(reasoning_effort);
+					}
+				} else {
+					requestBody.thinking = {
+						type: "enabled",
+						budget_tokens: thinkingBudget,
+					};
+				}
 				// Anthropic requires temperature to be exactly 1 when thinking is enabled
 				temperature = 1;
 			}
@@ -1322,39 +1426,62 @@ export async function prepareRequestBody(
 				(m) => m.role !== "system",
 			);
 
-			// Build the system field with cachePoint for long prompts
-			// AWS Bedrock uses "cachePoint" (not "cacheControl") as a SEPARATE content block after the text block
+			// Build the system field with cachePoint for long prompts.
+			// AWS Bedrock uses "cachePoint" (not "cacheControl") as a SEPARATE
+			// content block after the text block. Honor caller-supplied
+			// cache_control markers (Anthropic format) by mapping them to
+			// cachePoint, and fall back to a length heuristic when nothing was
+			// explicitly opted in.
 			if (bedrockSystemMessages.length > 0) {
 				const systemContent: Array<
 					{ text: string } | { cachePoint: { type: "default" } }
 				> = [];
 
+				const collectedBedrockBlocks: Array<{
+					text: string;
+					hasExplicitCacheControl: boolean;
+				}> = [];
 				for (const sysMsg of bedrockSystemMessages) {
-					let text: string;
 					if (typeof sysMsg.content === "string") {
-						text = sysMsg.content;
+						if (sysMsg.content.trim()) {
+							collectedBedrockBlocks.push({
+								text: sysMsg.content,
+								hasExplicitCacheControl: false,
+							});
+						}
 					} else if (Array.isArray(sysMsg.content)) {
-						text = sysMsg.content
-							.filter((c: any) => c.type === "text" && "text" in c)
-							.map((c: any) => c.text)
-							.join("");
-					} else {
+						for (const part of sysMsg.content as any[]) {
+							if (part.type === "text" && part.text && part.text.trim()) {
+								collectedBedrockBlocks.push({
+									text: part.text,
+									hasExplicitCacheControl: !!part.cache_control,
+								});
+							}
+						}
+					}
+				}
+
+				const callerSetBedrockCacheControl = collectedBedrockBlocks.some(
+					(b) => b.hasExplicitCacheControl,
+				);
+
+				for (const block of collectedBedrockBlocks) {
+					systemContent.push({ text: block.text });
+
+					if (block.hasExplicitCacheControl) {
+						if (bedrockCacheControlCount < bedrockMaxCacheControlBlocks) {
+							bedrockCacheControlCount++;
+							systemContent.push({ cachePoint: { type: "default" } });
+						}
 						continue;
 					}
 
-					if (!text || text.trim() === "") {
-						continue;
-					}
-
-					// Add text block first
-					systemContent.push({ text });
-
-					// Add cachePoint as separate block for long text (model-specific threshold)
-					const shouldCache =
-						text.length >= bedrockMinCacheableChars &&
+					const shouldHeuristicCache =
+						!callerSetBedrockCacheControl &&
+						block.text.length >= bedrockMinCacheableChars &&
 						bedrockCacheControlCount < bedrockMaxCacheControlBlocks;
 
-					if (shouldCache) {
+					if (shouldHeuristicCache) {
 						bedrockCacheControlCount++;
 						systemContent.push({ cachePoint: { type: "default" } });
 					}
@@ -1472,16 +1599,26 @@ export async function prepareRequestBody(
 									text: part.text,
 								});
 
-								// Add cachePoint as separate block for long text parts (model-specific threshold)
-								const shouldCache =
-									part.text.length >= bedrockMinCacheableChars &&
-									bedrockCacheControlCount < bedrockMaxCacheControlBlocks;
+								if (part.cache_control) {
+									if (bedrockCacheControlCount < bedrockMaxCacheControlBlocks) {
+										bedrockCacheControlCount++;
+										bedrockMessage.content.push({
+											cachePoint: { type: "default" },
+										});
+									}
+								} else {
+									// Add cachePoint as separate block for long text parts
+									// (model-specific threshold)
+									const shouldCache =
+										part.text.length >= bedrockMinCacheableChars &&
+										bedrockCacheControlCount < bedrockMaxCacheControlBlocks;
 
-								if (shouldCache) {
-									bedrockCacheControlCount++;
-									bedrockMessage.content.push({
-										cachePoint: { type: "default" },
-									});
+									if (shouldCache) {
+										bedrockCacheControlCount++;
+										bedrockMessage.content.push({
+											cachePoint: { type: "default" },
+										});
+									}
 								}
 							}
 						} else if (part.type === "image_url") {
@@ -1496,6 +1633,44 @@ export async function prepareRequestBody(
 			}
 
 			flushPendingToolResults();
+
+			// Turn-boundary caching: place a cachePoint after the last content
+			// block of the message just before the final user turn. This caches
+			// the entire conversation prefix (all prior turns) so only the
+			// newest user message is uncached. This mirrors the Anthropic
+			// turn-boundary logic in transformAnthropicMessages.
+			if (bedrockMessages.length >= 3) {
+				let lastUserIdx = -1;
+				for (let i = bedrockMessages.length - 1; i >= 0; i--) {
+					if (bedrockMessages[i].role === "user") {
+						lastUserIdx = i;
+						break;
+					}
+				}
+
+				const boundaryIdx = lastUserIdx > 0 ? lastUserIdx - 1 : -1;
+				if (
+					boundaryIdx >= 0 &&
+					bedrockCacheControlCount < bedrockMaxCacheControlBlocks
+				) {
+					const boundaryMsg = bedrockMessages[boundaryIdx];
+					if (
+						Array.isArray(boundaryMsg.content) &&
+						boundaryMsg.content.length > 0
+					) {
+						const lastBlock =
+							boundaryMsg.content[boundaryMsg.content.length - 1];
+						// Only add if the last block isn't already a cachePoint.
+						if (!lastBlock.cachePoint) {
+							boundaryMsg.content.push({
+								cachePoint: { type: "default" },
+							});
+							bedrockCacheControlCount++;
+						}
+					}
+				}
+			}
+
 			requestBody.messages = bedrockMessages;
 
 			// Transform tools from OpenAI format to Bedrock format
@@ -1540,40 +1715,74 @@ export async function prepareRequestBody(
 
 			// Enable thinking for Bedrock Anthropic models when reasoning is supported
 			if (supportsReasoning && (reasoning_effort || reasoning_max_tokens)) {
-				const getThinkingBudget = (effort?: string) => {
-					if (reasoning_max_tokens !== undefined) {
-						return Math.max(Math.min(reasoning_max_tokens, 128000), 1024);
+				if (bedrockProviderMapping?.reasoningMode === "adaptive") {
+					// Opus 4.7+ uses adaptive thinking: `thinking: { type: "adaptive" }` with
+					// `output_config.effort` controlling depth. `budget_tokens` is rejected.
+					requestBody.additionalModelRequestFields ??= {};
+					requestBody.additionalModelRequestFields.thinking = {
+						type: "adaptive",
+					};
+					const mapEffort = (
+						e: typeof reasoning_effort,
+					): "low" | "medium" | "high" | "xhigh" | "max" => {
+						switch (e) {
+							case "minimal":
+							case "low":
+								return "low";
+							case "medium":
+								return "medium";
+							case "high":
+								return "high";
+							case "xhigh":
+								return "xhigh";
+							default:
+								return "high";
+						}
+					};
+					const adaptiveEffort =
+						effort ??
+						(reasoning_effort ? mapEffort(reasoning_effort) : undefined);
+					if (adaptiveEffort !== undefined) {
+						requestBody.additionalModelRequestFields.output_config = {
+							effort: adaptiveEffort,
+						};
 					}
-					if (!effort) {
-						return 2000;
-					}
-					switch (effort) {
-						case "low":
-							return 1024;
-						case "high":
-							return 4000;
-						case "xhigh":
-							return 16000;
-						default:
+				} else {
+					const getThinkingBudget = (effort?: string) => {
+						if (reasoning_max_tokens !== undefined) {
+							return Math.max(Math.min(reasoning_max_tokens, 128000), 1024);
+						}
+						if (!effort) {
 							return 2000;
+						}
+						switch (effort) {
+							case "low":
+								return 1024;
+							case "high":
+								return 4000;
+							case "xhigh":
+								return 16000;
+							default:
+								return 2000;
+						}
+					};
+					const thinkingBudget = getThinkingBudget(reasoning_effort);
+					requestBody.additionalModelRequestFields ??= {};
+					requestBody.additionalModelRequestFields.thinking = {
+						type: "enabled",
+						budget_tokens: thinkingBudget,
+					};
+					// Ensure max_tokens is sufficient for thinking + response
+					const minMaxTokens = Math.max(1024, thinkingBudget + 1000);
+					if (
+						!inferenceConfig.maxTokens ||
+						inferenceConfig.maxTokens < minMaxTokens
+					) {
+						inferenceConfig.maxTokens = max_tokens ?? minMaxTokens;
 					}
-				};
-				const thinkingBudget = getThinkingBudget(reasoning_effort);
-				requestBody.additionalModelRequestFields ??= {};
-				requestBody.additionalModelRequestFields.thinking = {
-					type: "enabled",
-					budget_tokens: thinkingBudget,
-				};
+				}
 				// Anthropic requires temperature to be exactly 1 when thinking is enabled
 				inferenceConfig.temperature = 1;
-				// Ensure max_tokens is sufficient for thinking + response
-				const minMaxTokens = Math.max(1024, thinkingBudget + 1000);
-				if (
-					!inferenceConfig.maxTokens ||
-					inferenceConfig.maxTokens < minMaxTokens
-				) {
-					inferenceConfig.maxTokens = max_tokens ?? minMaxTokens;
-				}
 				if (Object.keys(inferenceConfig).length > 0) {
 					requestBody.inferenceConfig = inferenceConfig;
 				}
@@ -1589,12 +1798,13 @@ export async function prepareRequestBody(
 					...response_format.json_schema.schema,
 					additionalProperties: false,
 				} as Record<string, unknown>;
-				requestBody.additionalModelRequestFields = {
-					anthropic_beta: ["structured-outputs-2025-11-13"],
-					output_format: {
-						type: "json_schema",
-						schema,
-					},
+				requestBody.additionalModelRequestFields ??= {};
+				requestBody.additionalModelRequestFields.anthropic_beta = [
+					"structured-outputs-2025-11-13",
+				];
+				requestBody.additionalModelRequestFields.output_format = {
+					type: "json_schema",
+					schema,
 				};
 				requestBody.additionalModelResponseFieldPaths = ["/output_format"];
 			}

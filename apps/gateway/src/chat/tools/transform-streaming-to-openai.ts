@@ -4,10 +4,34 @@ import { logger } from "@llmgateway/logger";
 import { calculatePromptTokensFromMessages } from "./calculate-prompt-tokens.js";
 import { extractImages } from "./extract-images.js";
 import { adjustGoogleCandidateTokens } from "./extract-token-usage.js";
+import { mapFinishReasonToOpenai } from "./map-finish-reason-to-openai.js";
 import { transformOpenaiStreaming } from "./transform-openai-streaming.js";
 
 import type { Annotation, StreamingDelta } from "./types.js";
 import type { Provider } from "@llmgateway/models";
+
+function normalizeAnthropicUsage(usage: any): any {
+	if (!usage || typeof usage !== "object") {
+		return null;
+	}
+	const inputTokens = usage.input_tokens ?? 0;
+	const cacheCreation = usage.cache_creation_input_tokens ?? 0;
+	const cacheRead = usage.cache_read_input_tokens ?? 0;
+	const outputTokens = usage.output_tokens ?? 0;
+	const promptTokens = inputTokens + cacheCreation + cacheRead;
+	const hasCacheInfo = cacheRead > 0 || cacheCreation > 0;
+	return {
+		prompt_tokens: promptTokens,
+		completion_tokens: outputTokens,
+		total_tokens: promptTokens + outputTokens,
+		...(hasCacheInfo && {
+			prompt_tokens_details: {
+				cached_tokens: cacheRead,
+				...(cacheCreation > 0 && { cache_creation_tokens: cacheCreation }),
+			},
+		}),
+	};
+}
 
 export function transformStreamingToOpenai(
 	usedProvider: Provider,
@@ -78,7 +102,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (
 				data.type === "content_block_delta" &&
@@ -100,7 +124,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (
 				data.type === "content_block_start" &&
@@ -126,7 +150,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (
 				data.type === "content_block_start" &&
@@ -157,7 +181,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (
 				data.type === "content_block_delta" &&
@@ -183,7 +207,7 @@ export function transformStreamingToOpenai(
 								finish_reason: null,
 							},
 						],
-						usage: data.usage ?? null,
+						usage: normalizeAnthropicUsage(data.usage),
 					};
 				} else {
 					transformedData = {
@@ -208,7 +232,7 @@ export function transformStreamingToOpenai(
 								finish_reason: null,
 							},
 						],
-						usage: data.usage ?? null,
+						usage: normalizeAnthropicUsage(data.usage),
 					};
 				}
 			} else if (
@@ -244,7 +268,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (data.type === "message_delta" && data.delta?.stop_reason) {
 				const stopReason = data.delta.stop_reason;
@@ -259,17 +283,10 @@ export function transformStreamingToOpenai(
 							delta: {
 								role: "assistant",
 							},
-							finish_reason:
-								stopReason === "end_turn"
-									? "stop"
-									: stopReason === "tool_use"
-										? "tool_calls"
-										: stopReason === "max_tokens"
-											? "length"
-											: "stop",
+							finish_reason: mapFinishReasonToOpenai(stopReason, usedProvider),
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (data.type === "message_stop" || data.stop_reason) {
 				const stopReason = data.stop_reason ?? "end_turn";
@@ -284,17 +301,10 @@ export function transformStreamingToOpenai(
 							delta: {
 								role: "assistant",
 							},
-							finish_reason:
-								stopReason === "end_turn"
-									? "stop"
-									: stopReason === "tool_use"
-										? "tool_calls"
-										: stopReason === "max_tokens"
-											? "length"
-											: "stop",
+							finish_reason: mapFinishReasonToOpenai(stopReason, usedProvider),
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else if (data.delta?.text) {
 				transformedData = {
@@ -312,7 +322,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			} else {
 				logger.warn("[streaming] Unrecognized Anthropic chunk", {
@@ -336,7 +346,7 @@ export function transformStreamingToOpenai(
 							finish_reason: null,
 						},
 					],
-					usage: data.usage ?? null,
+					usage: normalizeAnthropicUsage(data.usage),
 				};
 			}
 			break;
@@ -347,50 +357,6 @@ export function transformStreamingToOpenai(
 		case "google-vertex":
 		case "quartz":
 		case "obsidian": {
-			const mapFinishReason = (
-				finishReason?: string,
-				hasFunctionCalls?: boolean,
-				promptBlockReason?: string,
-			): string => {
-				if (promptBlockReason) {
-					switch (promptBlockReason) {
-						case "SAFETY":
-						case "PROHIBITED_CONTENT":
-						case "BLOCKLIST":
-						case "OTHER":
-							return "content_filter";
-						default:
-							return "stop";
-					}
-				}
-
-				if (!finishReason) {
-					return hasFunctionCalls ? "tool_calls" : "stop";
-				}
-
-				switch (finishReason) {
-					case "STOP":
-						return hasFunctionCalls ? "tool_calls" : "stop";
-					case "MAX_TOKENS":
-						return "length";
-					case "MALFORMED_FUNCTION_CALL":
-					case "UNEXPECTED_TOOL_CALL":
-						return "tool_calls";
-					case "SAFETY":
-					case "PROHIBITED_CONTENT":
-					case "RECITATION":
-					case "BLOCKLIST":
-					case "SPII":
-					case "LANGUAGE":
-					case "IMAGE_SAFETY":
-					case "IMAGE_PROHIBITED_CONTENT":
-					case "NO_IMAGE":
-						return "content_filter";
-					default:
-						return "stop";
-				}
-			};
-
 			const buildUsage = (
 				usageMetadata: any | undefined,
 				messagesForFallback: any[],
@@ -670,8 +636,9 @@ export function transformStreamingToOpenai(
 										? candidate.index
 										: candidateIdx,
 								delta: { role: "assistant" },
-								finish_reason: mapFinishReason(
+								finish_reason: mapFinishReasonToOpenai(
 									finishReason,
+									usedProvider,
 									candidateHasFunctionCalls,
 									promptBlockReason,
 								),
@@ -681,8 +648,9 @@ export function transformStreamingToOpenai(
 							{
 								index: 0,
 								delta: { role: "assistant" },
-								finish_reason: mapFinishReason(
+								finish_reason: mapFinishReasonToOpenai(
 									firstCandidate?.finishReason,
+									usedProvider,
 									false,
 									promptBlockReason,
 								),

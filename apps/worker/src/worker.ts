@@ -29,7 +29,12 @@ import { logger } from "@llmgateway/logger";
 import { hasErrorCode } from "@llmgateway/models";
 import { calculateFees, isCreditTopUpAmountInRange } from "@llmgateway/shared";
 
-import { runFollowUpEmailsLoop } from "./services/follow-up-emails.js";
+import { posthog } from "./posthog.js";
+import {
+	getOrgRecipientEmail,
+	runFollowUpEmailsLoop,
+	sendLowBalanceEmail,
+} from "./services/follow-up-emails.js";
 import {
 	PROJECT_STATS_REFRESH_INTERVAL_SECONDS,
 	refreshProjectHourlyStats,
@@ -644,6 +649,8 @@ export async function batchProcessLogs(): Promise<void> {
 		return;
 	}
 
+	const deductedOrgIds: string[] = [];
+
 	try {
 		await db.transaction(async (tx) => {
 			// Get unprocessed logs with row-level locking to prevent concurrent processing
@@ -835,6 +842,8 @@ export async function batchProcessLogs(): Promise<void> {
 							})
 							.where(eq(organization.id, orgId));
 
+						deductedOrgIds.push(orgId);
+
 						logger.debug(
 							`Deducted ${costNumber} regular credits from organization ${orgId}`,
 						);
@@ -860,6 +869,9 @@ export async function batchProcessLogs(): Promise<void> {
 					}
 				}
 			}
+
+			// deductedOrgIds is populated inside the loop above — only orgs
+			// with actual regular-credit deductions are included.
 
 			// Apply referral earnings to referrer organizations
 			for (const [referrerOrgId, earnings] of referralEarnings.entries()) {
@@ -940,6 +952,11 @@ export async function batchProcessLogs(): Promise<void> {
 
 			logger.debug(`Marked ${logIds.length} logs as processed`);
 		});
+
+		// Async low-balance alert check (outside transaction, non-blocking)
+		if (deductedOrgIds.length > 0) {
+			void checkLowBalanceAlerts(deductedOrgIds);
+		}
 	} catch (error) {
 		logger.error(
 			"Error processing batch credit deductions",
@@ -948,6 +965,118 @@ export async function batchProcessLogs(): Promise<void> {
 	} finally {
 		await releaseLock(CREDIT_PROCESSING_LOCK_KEY);
 	}
+}
+
+async function checkLowBalanceAlerts(orgIds: string[]): Promise<void> {
+	try {
+		const orgs = await db
+			.select()
+			.from(organization)
+			.where(inArray(organization.id, orgIds));
+
+		for (const org of orgs) {
+			try {
+				const lastTopUp = Number(org.lastTopUpAmount ?? 0);
+				if (lastTopUp <= 0) {
+					continue;
+				}
+
+				const currentBalance = Number(org.credits ?? 0);
+				const ratio = currentBalance / lastTopUp;
+
+				if (ratio < 0.2) {
+					await enqueueLowBalanceEmail(
+						org.id,
+						"low_balance_20",
+						currentBalance,
+					);
+				}
+
+				if (ratio < 0.05) {
+					await enqueueLowBalanceEmail(org.id, "low_balance_5", currentBalance);
+				}
+			} catch (error) {
+				logger.error(
+					`Error checking low balance alerts for org ${org.id}`,
+					error instanceof Error ? error : new Error(String(error)),
+				);
+			}
+		}
+	} catch (error) {
+		logger.error(
+			"Error checking low balance alerts",
+			error instanceof Error ? error : new Error(String(error)),
+		);
+	}
+}
+
+async function enqueueLowBalanceEmail(
+	organizationId: string,
+	emailType: "low_balance_20" | "low_balance_5",
+	currentBalance: number,
+): Promise<void> {
+	const email = await getOrgRecipientEmail(organizationId);
+	if (!email) {
+		return;
+	}
+
+	// Check if already sent for this cycle (without inserting yet)
+	const existing = await db.query.followUpEmail.findFirst({
+		where: {
+			organizationId: { eq: organizationId },
+			emailType: { eq: emailType },
+		},
+	});
+
+	if (existing) {
+		return;
+	}
+
+	const threshold = emailType === "low_balance_20" ? "20" : "5";
+
+	if (process.env.EMAIL_FOLLOW_UPS !== "true") {
+		logger.info("Low balance alert (dry run)", {
+			kind: "low_balance_alert",
+			emailType,
+			organizationId,
+			to: email,
+			currentBalance,
+			threshold,
+		});
+		return;
+	}
+
+	// Send first, then persist dedup record on success
+	await sendLowBalanceEmail({
+		to: email,
+		currentBalance,
+		threshold,
+		organizationId,
+	});
+
+	posthog.capture({
+		distinctId: "organization",
+		event: "low_balance_alert_sent",
+		groups: { organization: organizationId },
+		properties: { threshold, currentBalance, organization: organizationId },
+	});
+
+	// Persist dedup record after successful send
+	await db
+		.insert(tables.followUpEmail)
+		.values({
+			organizationId,
+			emailType,
+			sentTo: email,
+		})
+		.onConflictDoNothing();
+
+	logger.info("Low balance alert sent", {
+		emailType,
+		organizationId,
+		currentBalance,
+		threshold,
+	});
 }
 
 export async function processLogQueue(): Promise<void> {

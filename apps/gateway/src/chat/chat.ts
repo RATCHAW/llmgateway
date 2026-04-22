@@ -6523,6 +6523,7 @@ chat.openapi(completions, async (c) => {
 											imageInputCost: null,
 											imageOutputCost: null,
 											totalCost: null,
+											dataStorageCost: null as number | null,
 											promptTokens: null,
 											completionTokens: null,
 											cachedTokens: null,

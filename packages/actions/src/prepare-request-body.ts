@@ -1555,11 +1555,17 @@ export async function prepareRequestBody(
 
 					// Add tool use blocks
 					msg.tool_calls.forEach((toolCall: any) => {
+						let input: Record<string, unknown> = {};
+						try {
+							input = JSON.parse(toolCall.function.arguments ?? "{}");
+						} catch {
+							input = {};
+						}
 						bedrockMessage.content.push({
 							toolUse: {
 								toolUseId: toolCall.id,
 								name: toolCall.function.name,
-								input: JSON.parse(toolCall.function.arguments),
+								input,
 							},
 						});
 					});

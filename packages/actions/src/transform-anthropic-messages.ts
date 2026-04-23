@@ -187,11 +187,17 @@ export async function transformAnthropicMessages(
 					idMapping.get(toolCall.id)!.push(uniqueId);
 					seenToolUseIds.add(uniqueId);
 
+					let input: Record<string, unknown> = {};
+					try {
+						input = JSON.parse(toolCall.function.arguments ?? "{}");
+					} catch {
+						input = {};
+					}
 					return {
 						type: "tool_use",
 						id: uniqueId,
 						name: toolCall.function.name,
-						input: JSON.parse(toolCall.function.arguments),
+						input,
 					};
 				},
 			);

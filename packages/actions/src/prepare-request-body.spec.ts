@@ -895,4 +895,104 @@ describe("prepareRequestBody - AWS Bedrock", () => {
 			],
 		});
 	});
+
+	test("should fall back to empty object when tool_call arguments are invalid JSON (anthropic)", async () => {
+		const malformedArguments = '{"city":"Berl';
+
+		const requestBody = (await prepareRequestBody(
+			"anthropic",
+			"claude-3-5-sonnet-20241022",
+			[
+				{ role: "user", content: "What is the weather in Berlin?" },
+				{
+					role: "assistant",
+					content: "",
+					tool_calls: [
+						{
+							id: "tool_1",
+							type: "function",
+							function: {
+								name: "get_weather",
+								arguments: malformedArguments,
+							},
+						},
+					],
+				},
+				{
+					role: "tool",
+					tool_call_id: "tool_1",
+					content: "17",
+				},
+			],
+			false,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			false,
+			false,
+		)) as AnthropicRequestBody;
+
+		expect(requestBody.messages).toHaveLength(3);
+		const assistantMsg = requestBody.messages[1] as any;
+		expect(assistantMsg.role).toBe("assistant");
+		const toolUseBlock = assistantMsg.content.find(
+			(c: any) => c.type === "tool_use",
+		);
+		expect(toolUseBlock).toBeDefined();
+		expect(toolUseBlock.input).toEqual({});
+	});
+
+	test("should fall back to empty object when tool_call arguments are invalid JSON (bedrock)", async () => {
+		const malformedArguments = '{"city":"Berl';
+
+		const requestBody = (await prepareRequestBody(
+			"aws-bedrock",
+			"anthropic.claude-sonnet-4-6",
+			[
+				{ role: "user", content: "What is the weather in Berlin?" },
+				{
+					role: "assistant",
+					content: "",
+					tool_calls: [
+						{
+							id: "tool_1",
+							type: "function",
+							function: {
+								name: "get_weather",
+								arguments: malformedArguments,
+							},
+						},
+					],
+				},
+				{
+					role: "tool",
+					tool_call_id: "tool_1",
+					content: "17",
+				},
+			],
+			false,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			false,
+			false,
+		)) as any;
+
+		const assistantMsg = requestBody.messages[1];
+		const toolUseBlock = assistantMsg.content.find((c: any) => c.toolUse);
+		expect(toolUseBlock).toBeDefined();
+		expect(toolUseBlock.toolUse.input).toEqual({});
+	});
 });

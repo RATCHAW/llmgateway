@@ -10,6 +10,7 @@ import {
 	type ToolUseContent,
 } from "@llmgateway/models";
 
+import { InvalidToolCallArgumentsError } from "./errors.js";
 import { processImageUrl } from "./process-image-url.js";
 
 /**
@@ -187,11 +188,15 @@ export async function transformAnthropicMessages(
 					idMapping.get(toolCall.id)!.push(uniqueId);
 					seenToolUseIds.add(uniqueId);
 
-					let input: Record<string, unknown> = {};
+					let input: Record<string, unknown>;
 					try {
 						input = JSON.parse(toolCall.function.arguments ?? "{}");
-					} catch {
-						input = {};
+					} catch (err) {
+						throw new InvalidToolCallArgumentsError({
+							toolCallId: toolCall.id,
+							toolName: toolCall.function.name,
+							cause: err,
+						});
 					}
 					return {
 						type: "tool_use",

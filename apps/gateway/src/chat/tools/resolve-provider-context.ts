@@ -9,6 +9,7 @@ import {
 import {
 	getProviderEndpoint,
 	getProviderHeaders,
+	InvalidToolCallArgumentsError,
 	prepareRequestBody,
 } from "@llmgateway/actions";
 import {
@@ -365,32 +366,40 @@ export async function resolveProviderContext(
 		providers.find((p) => p.id === usedProvider)?.cancellation === true;
 
 	// --- Request body preparation ---
-	const requestBody: ProviderRequestBody = await prepareRequestBody(
-		usedProvider as Provider,
-		upstreamModelName,
-		options.messages as BaseMessage[],
-		options.effectiveStream,
-		temperature,
-		max_tokens,
-		top_p,
-		frequency_penalty,
-		presence_penalty,
-		options.response_format,
-		options.tools,
-		options.tool_choice,
-		options.reasoning_effort,
-		supportsReasoning,
-		process.env.NODE_ENV === "production",
-		options.maxImageSizeMB,
-		options.userPlan,
-		options.sensitive_word_check,
-		options.image_config,
-		options.effort,
-		isImageGeneration,
-		options.webSearchTool,
-		options.reasoning_max_tokens,
-		useResponsesApi,
-	);
+	let requestBody: ProviderRequestBody;
+	try {
+		requestBody = await prepareRequestBody(
+			usedProvider as Provider,
+			upstreamModelName,
+			options.messages as BaseMessage[],
+			options.effectiveStream,
+			temperature,
+			max_tokens,
+			top_p,
+			frequency_penalty,
+			presence_penalty,
+			options.response_format,
+			options.tools,
+			options.tool_choice,
+			options.reasoning_effort,
+			supportsReasoning,
+			process.env.NODE_ENV === "production",
+			options.maxImageSizeMB,
+			options.userPlan,
+			options.sensitive_word_check,
+			options.image_config,
+			options.effort,
+			isImageGeneration,
+			options.webSearchTool,
+			options.reasoning_max_tokens,
+			useResponsesApi,
+		);
+	} catch (err) {
+		if (err instanceof InvalidToolCallArgumentsError) {
+			throw new HTTPException(400, { message: err.message });
+		}
+		throw err;
+	}
 
 	// Post-validation of max_tokens in request body
 	if (

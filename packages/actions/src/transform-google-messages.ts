@@ -4,6 +4,7 @@ import {
 	isTextContent,
 } from "@llmgateway/models";
 
+import { InvalidToolCallArgumentsError } from "./errors.js";
 import { processImageUrl } from "./process-image-url.js";
 
 // Google-specific message format with all part types
@@ -103,11 +104,15 @@ export async function transformGoogleMessages(
 			// Add function calls
 			for (const toolCall of m.tool_calls) {
 				if (toolCall.type === "function") {
-					let args: Record<string, unknown> = {};
+					let args: Record<string, unknown>;
 					try {
 						args = JSON.parse(toolCall.function.arguments ?? "{}");
-					} catch {
-						args = {};
+					} catch (err) {
+						throw new InvalidToolCallArgumentsError({
+							toolCallId: toolCall.id,
+							toolName: toolCall.function.name,
+							cause: err,
+						});
 					}
 					const functionCallPart: GooglePart = {
 						functionCall: {

@@ -51,6 +51,7 @@ import {
 	getProviderEndpoint,
 	getProviderHeaders,
 	getProviderSelectionPrice,
+	InvalidToolCallArgumentsError,
 	prepareRequestBody,
 	type RoutingMetadata,
 } from "@llmgateway/actions";
@@ -3834,32 +3835,40 @@ chat.openapi(completions, async (c) => {
 		}
 	}
 
-	let requestBody: ProviderRequestBody = await prepareRequestBody(
-		usedProvider,
-		upstreamModelName,
-		messages as BaseMessage[],
-		effectiveStream,
-		temperature,
-		max_tokens,
-		top_p,
-		frequency_penalty,
-		presence_penalty,
-		response_format,
-		tools,
-		tool_choice,
-		reasoning_effort,
-		supportsReasoning,
-		process.env.NODE_ENV === "production",
-		maxImageSizeMB,
-		userPlan,
-		sensitive_word_check,
-		image_config,
-		effort,
-		isImageGeneration,
-		webSearchTool,
-		reasoning_max_tokens,
-		useResponsesApi,
-	);
+	let requestBody: ProviderRequestBody;
+	try {
+		requestBody = await prepareRequestBody(
+			usedProvider,
+			upstreamModelName,
+			messages as BaseMessage[],
+			effectiveStream,
+			temperature,
+			max_tokens,
+			top_p,
+			frequency_penalty,
+			presence_penalty,
+			response_format,
+			tools,
+			tool_choice,
+			reasoning_effort,
+			supportsReasoning,
+			process.env.NODE_ENV === "production",
+			maxImageSizeMB,
+			userPlan,
+			sensitive_word_check,
+			image_config,
+			effort,
+			isImageGeneration,
+			webSearchTool,
+			reasoning_max_tokens,
+			useResponsesApi,
+		);
+	} catch (err) {
+		if (err instanceof InvalidToolCallArgumentsError) {
+			throw new HTTPException(400, { message: err.message });
+		}
+		throw err;
+	}
 
 	// Validate effective max_tokens value after prepareRequestBody
 	if (

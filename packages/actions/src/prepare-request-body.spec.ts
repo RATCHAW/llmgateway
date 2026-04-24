@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 
+import { InvalidToolCallArgumentsError } from "./errors.js";
 import { prepareRequestBody } from "./prepare-request-body.js";
 
 import type { AnthropicRequestBody } from "@llmgateway/models";
@@ -896,103 +897,138 @@ describe("prepareRequestBody - AWS Bedrock", () => {
 		});
 	});
 
-	test("should fall back to empty object when tool_call arguments are invalid JSON (anthropic)", async () => {
+	test("should throw InvalidToolCallArgumentsError for malformed tool_call arguments (anthropic)", async () => {
 		const malformedArguments = '{"city":"Berl';
-
-		const requestBody = (await prepareRequestBody(
-			"anthropic",
-			"claude-3-5-sonnet-20241022",
-			[
-				{ role: "user", content: "What is the weather in Berlin?" },
-				{
-					role: "assistant",
-					content: "",
-					tool_calls: [
-						{
-							id: "tool_1",
-							type: "function",
-							function: {
-								name: "get_weather",
-								arguments: malformedArguments,
+		const call = () =>
+			prepareRequestBody(
+				"anthropic",
+				"claude-3-5-sonnet-20241022",
+				[
+					{ role: "user", content: "What is the weather in Berlin?" },
+					{
+						role: "assistant",
+						content: "",
+						tool_calls: [
+							{
+								id: "tool_1",
+								type: "function",
+								function: {
+									name: "get_weather",
+									arguments: malformedArguments,
+								},
 							},
-						},
-					],
-				},
-				{
-					role: "tool",
-					tool_call_id: "tool_1",
-					content: "17",
-				},
-			],
-			false,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			false,
-			false,
-		)) as AnthropicRequestBody;
+						],
+					},
+					{
+						role: "tool",
+						tool_call_id: "tool_1",
+						content: "17",
+					},
+				],
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+				false,
+			);
 
-		expect(requestBody.messages).toHaveLength(3);
-		const assistantMsg = requestBody.messages[1] as any;
-		expect(assistantMsg.role).toBe("assistant");
-		const toolUseBlock = assistantMsg.content.find(
-			(c: any) => c.type === "tool_use",
-		);
-		expect(toolUseBlock).toBeDefined();
-		expect(toolUseBlock.input).toEqual({});
+		await expect(call()).rejects.toBeInstanceOf(InvalidToolCallArgumentsError);
 	});
 
-	test("should fall back to empty object when tool_call arguments are invalid JSON (bedrock)", async () => {
+	test("should throw InvalidToolCallArgumentsError for malformed tool_call arguments (bedrock)", async () => {
 		const malformedArguments = '{"city":"Berl';
-
-		const requestBody = (await prepareRequestBody(
-			"aws-bedrock",
-			"anthropic.claude-sonnet-4-6",
-			[
-				{ role: "user", content: "What is the weather in Berlin?" },
-				{
-					role: "assistant",
-					content: "",
-					tool_calls: [
-						{
-							id: "tool_1",
-							type: "function",
-							function: {
-								name: "get_weather",
-								arguments: malformedArguments,
+		const call = () =>
+			prepareRequestBody(
+				"aws-bedrock",
+				"anthropic.claude-sonnet-4-6",
+				[
+					{ role: "user", content: "What is the weather in Berlin?" },
+					{
+						role: "assistant",
+						content: "",
+						tool_calls: [
+							{
+								id: "tool_1",
+								type: "function",
+								function: {
+									name: "get_weather",
+									arguments: malformedArguments,
+								},
 							},
-						},
-					],
-				},
-				{
-					role: "tool",
-					tool_call_id: "tool_1",
-					content: "17",
-				},
-			],
-			false,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			false,
-			false,
-		)) as any;
+						],
+					},
+					{
+						role: "tool",
+						tool_call_id: "tool_1",
+						content: "17",
+					},
+				],
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+				false,
+			);
 
-		const assistantMsg = requestBody.messages[1];
-		const toolUseBlock = assistantMsg.content.find((c: any) => c.toolUse);
-		expect(toolUseBlock).toBeDefined();
-		expect(toolUseBlock.toolUse.input).toEqual({});
+		await expect(call()).rejects.toBeInstanceOf(InvalidToolCallArgumentsError);
+	});
+
+	test("should throw InvalidToolCallArgumentsError for malformed tool_call arguments (google)", async () => {
+		const malformedArguments = '{"city":"Berl';
+		const call = () =>
+			prepareRequestBody(
+				"google-vertex",
+				"gemini-2.0-flash-001",
+				[
+					{ role: "user", content: "What is the weather in Berlin?" },
+					{
+						role: "assistant",
+						content: "",
+						tool_calls: [
+							{
+								id: "tool_1",
+								type: "function",
+								function: {
+									name: "get_weather",
+									arguments: malformedArguments,
+								},
+							},
+						],
+					},
+					{
+						role: "tool",
+						tool_call_id: "tool_1",
+						content: "17",
+					},
+				],
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+				false,
+			);
+
+		await expect(call()).rejects.toBeInstanceOf(InvalidToolCallArgumentsError);
 	});
 });

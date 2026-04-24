@@ -15,6 +15,7 @@ import {
 	type WebSearchTool,
 } from "@llmgateway/models";
 
+import { InvalidToolCallArgumentsError } from "./errors.js";
 import { transformAnthropicMessages } from "./transform-anthropic-messages.js";
 import { transformGoogleMessages } from "./transform-google-messages.js";
 
@@ -1555,11 +1556,15 @@ export async function prepareRequestBody(
 
 					// Add tool use blocks
 					msg.tool_calls.forEach((toolCall: any) => {
-						let input: Record<string, unknown> = {};
+						let input: Record<string, unknown>;
 						try {
 							input = JSON.parse(toolCall.function.arguments ?? "{}");
-						} catch {
-							input = {};
+						} catch (err) {
+							throw new InvalidToolCallArgumentsError({
+								toolCallId: toolCall.id,
+								toolName: toolCall.function.name,
+								cause: err,
+							});
 						}
 						bedrockMessage.content.push({
 							toolUse: {

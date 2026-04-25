@@ -9,6 +9,7 @@ import {
 	getConcurrentTestOptions,
 	getTestOptions,
 	logMode,
+	reasoningMaxTokensModels,
 	reasoningModels,
 	validateLogByRequestId,
 	validateResponse,
@@ -105,6 +106,86 @@ describe("e2e", getConcurrentTestOptions(), () => {
 			}
 
 			// Check for reasoning response in the message
+			if (shouldCheckReasoning) {
+				expect(json.choices[0].message).toHaveProperty("reasoning");
+			}
+		},
+	);
+
+	test.each(reasoningMaxTokensModels)(
+		"reasoning max_tokens budget $model",
+		getTestOptions(),
+		async ({ model, providers }) => {
+			const requestId = generateTestRequestId();
+			const res = await app.request("/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-request-id": requestId,
+					"x-no-fallback": "true",
+					Authorization: `Bearer real-token`,
+				},
+				body: JSON.stringify({
+					model: model,
+					messages: [
+						{
+							role: "system",
+							content: "You are a helpful assistant.",
+						},
+						{
+							role: "user",
+							content: "What is 2/3 + 1/4 + 5/6?",
+						},
+					],
+					reasoning: { max_tokens: 1024 },
+				}),
+			});
+
+			const json = await res.json();
+			if (logMode) {
+				console.log(
+					"reasoning max_tokens response:",
+					JSON.stringify(json, null, 2),
+				);
+			}
+
+			expect(res.status).toBe(200);
+			validateResponse(json);
+
+			const log = await validateLogByRequestId(requestId);
+			expect(log.streamed).toBe(false);
+
+			const reasoningProvider = providers?.find(
+				(p: ProviderModelMapping) => p.reasoningMaxTokens === true,
+			) as ProviderModelMapping;
+			const shouldCheckReasoning =
+				reasoningProvider?.reasoningOutput !== "omit";
+
+			if (shouldCheckReasoning) {
+				expect(log.reasoningContent).toBeTruthy();
+				expect(log.reasoningContent).not.toBeNull();
+				expect(typeof log.reasoningContent).toBe("string");
+				if (log.reasoningContent) {
+					expect(log.reasoningContent.length).toBeGreaterThan(0);
+				}
+			}
+
+			expect(json).toHaveProperty("usage");
+			expect(json.usage).toHaveProperty("prompt_tokens");
+			expect(json.usage).toHaveProperty("completion_tokens");
+			expect(json.usage).toHaveProperty("total_tokens");
+			expect(typeof json.usage.prompt_tokens).toBe("number");
+			expect(typeof json.usage.completion_tokens).toBe("number");
+			expect(typeof json.usage.total_tokens).toBe("number");
+			expect(json.usage.prompt_tokens).toBeGreaterThan(0);
+			expect(json.usage.completion_tokens).toBeGreaterThan(0);
+			expect(json.usage.total_tokens).toBeGreaterThan(0);
+
+			if (json.usage.reasoning_tokens !== undefined) {
+				expect(typeof json.usage.reasoning_tokens).toBe("number");
+				expect(json.usage.reasoning_tokens).toBeGreaterThanOrEqual(0);
+			}
+
 			if (shouldCheckReasoning) {
 				expect(json.choices[0].message).toHaveProperty("reasoning");
 			}

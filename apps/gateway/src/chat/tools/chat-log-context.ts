@@ -18,6 +18,7 @@ export interface ChatCompletionLogState {
 	resolveStreamCompletion?: () => void;
 	caughtError?: unknown;
 	internalContentFilter?: boolean;
+	gatewayContentFilterResponse?: unknown;
 	clientErrorSynthesized?: boolean;
 	syncInsert?: boolean;
 	logIdOverride?: string;

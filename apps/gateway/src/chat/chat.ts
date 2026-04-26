@@ -5,7 +5,13 @@ import { streamSSE } from "hono/streaming";
 
 import { extractFirstSseEventData } from "@/chat/tools/extract-first-sse-event-data.js";
 import { validateSource } from "@/chat/tools/validate-source.js";
-import { reportKeyError, reportKeySuccess } from "@/lib/api-key-health.js";
+import { getApiKeyFingerprint } from "@/lib/api-key-fingerprint.js";
+import {
+	reportKeyError,
+	reportKeySuccess,
+	reportTrackedKeyError,
+	reportTrackedKeySuccess,
+} from "@/lib/api-key-health.js";
 import { assertApiKeyWithinUsageLimits } from "@/lib/api-key-usage-limits.js";
 import {
 	findApiKeyByToken,
@@ -22,6 +28,8 @@ import { throwIamException, validateModelAccess } from "@/lib/iam.js";
 import {
 	calculateDataStorageCost,
 	getUnifiedFinishReason,
+	isContentFilterFinishReason,
+	insertLog as _insertLog,
 } from "@/lib/logs.js";
 import {
 	checkProviderRateLimit,
@@ -59,6 +67,7 @@ import {
 	type InferSelectModel,
 	isCachingEnabled,
 	metricsKey,
+	type LogInsertData,
 	shortid,
 	type tables,
 	type ProviderMetrics,
@@ -92,11 +101,8 @@ import {
 import { chatCompletionLogMiddleware } from "./middleware/chat-completion-log.js";
 import { completionsRequestSchema } from "./schemas/completions.js";
 import {
-	enqueueChatLog,
 	finishStreamCompletion,
 	registerStreamCompletion,
-	updateBaseLogOptions,
-	updateLogInsertOptions,
 } from "./tools/chat-log-context.js";
 import {
 	checkContentFilter,
@@ -106,6 +112,7 @@ import {
 } from "./tools/check-content-filter.js";
 import { convertImagesToBase64 } from "./tools/convert-images-to-base64.js";
 import { countInputImages } from "./tools/count-input-images.js";
+import { createLogEntry } from "./tools/create-log-entry.js";
 import { estimateTokensFromContent } from "./tools/estimate-tokens-from-content.js";
 import { estimateTokens } from "./tools/estimate-tokens.js";
 import {
@@ -123,6 +130,7 @@ import { getProviderEnv } from "./tools/get-provider-env.js";
 import { hasMeaningfulAssistantOutput } from "./tools/has-meaningful-assistant-output.js";
 import { healJsonResponse } from "./tools/heal-json-response.js";
 import { isModelTrulyFree } from "./tools/is-model-truly-free.js";
+import { mapFinishReasonToOpenai } from "./tools/map-finish-reason-to-openai.js";
 import { messagesContainImages } from "./tools/messages-contain-images.js";
 import { mightBeCompleteJson } from "./tools/might-be-complete-json.js";
 import { normalizeStreamingError } from "./tools/normalize-streaming-error.js";
@@ -143,6 +151,7 @@ import {
 import {
 	type RoutingAttempt,
 	getErrorType,
+	isRetryableErrorType,
 	MAX_RETRIES,
 	providerRetryKey,
 	selectNextProvider,
@@ -152,7 +161,12 @@ import {
 	encodeChatMessages,
 	messageContentToString,
 } from "./tools/tokenizer.js";
-import { transformResponseToOpenai } from "./tools/transform-response-to-openai.js";
+import {
+	applyExtendedUsageFields,
+	stripRequestScopedMetadataFromOpenAiResponse,
+	transformResponseToOpenai,
+	withCurrentRequestMetadataOnOpenAiResponse,
+} from "./tools/transform-response-to-openai.js";
 import { transformStreamingToOpenai } from "./tools/transform-streaming-to-openai.js";
 import { validateFreeModelUsage } from "./tools/validate-free-model-usage.js";
 import { validateModelCapabilities } from "./tools/validate-model-capabilities.js";
@@ -167,6 +181,27 @@ import type { ServerTypes } from "@/vars.js";
  * - Non-default regions only pass if a region-specific env key exists
  *   (e.g. LLM_ALIBABA_API_KEY__US_VIRGINIA).
  */
+function toDataStorageCostNumber(
+	promptTokens: number | string | null | undefined,
+	cachedTokens: number | string | null | undefined,
+	completionTokens: number | string | null | undefined,
+	reasoningTokens: number | string | null | undefined,
+	retentionLevel: "retain" | "none" | null,
+): number | null {
+	if (retentionLevel === "none") {
+		return null;
+	}
+	const str = calculateDataStorageCost(
+		promptTokens,
+		cachedTokens,
+		completionTokens,
+		reasoningTokens,
+		retentionLevel,
+	);
+	const num = Number(str);
+	return Number.isFinite(num) ? num : null;
+}
+
 function filterRegionsByAvailableKeys(
 	expandedProviders: ProviderModelMapping[],
 ): ProviderModelMapping[] {
@@ -450,6 +485,48 @@ function addContentFilterRoutingMetadata(
 	};
 }
 
+function withUsedApiKeyHash(
+	routingMetadata: RoutingMetadata | undefined,
+	usedApiKeyHash: string | undefined,
+): RoutingMetadata | undefined {
+	if (!routingMetadata || !usedApiKeyHash) {
+		return routingMetadata;
+	}
+
+	if (routingMetadata.usedApiKeyHash === usedApiKeyHash) {
+		return routingMetadata;
+	}
+
+	return {
+		...routingMetadata,
+		usedApiKeyHash,
+	};
+}
+
+function buildRoutingAttempt(
+	provider: string,
+	model: string,
+	statusCode: number,
+	errorType: string,
+	succeeded: boolean,
+	options?: {
+		region?: string;
+		apiKeyHash?: string;
+		logId?: string;
+	},
+): RoutingAttempt {
+	return {
+		provider,
+		model,
+		...(options?.region && { region: options.region }),
+		status_code: statusCode,
+		error_type: errorType,
+		succeeded,
+		...(options?.apiKeyHash && { apiKeyHash: options.apiKeyHash }),
+		...(options?.logId && { logId: options.logId }),
+	};
+}
+
 function usesGoogleQueryToken(provider: string): boolean {
 	return (
 		provider === "google-ai-studio" ||
@@ -635,7 +712,7 @@ export async function inspectImmediateStreamingProviderError(
 			try {
 				await reader.cancel();
 			} catch {
-				// Ignore cancellation errors once the immediate error is extracted.
+				// Ignore cancellation errors - the response body is no longer needed.
 			}
 
 			return {
@@ -654,7 +731,7 @@ export async function inspectImmediateStreamingProviderError(
 		try {
 			await reader.cancel();
 		} catch {
-			// Ignore cancellation errors when the replay stream setup fails.
+			// Ignore cancellation errors - the response body is no longer needed.
 		}
 
 		return {
@@ -787,16 +864,40 @@ const completions = createRoute({
 							prompt_tokens_details: z
 								.object({
 									cached_tokens: z.number(),
+									cache_write_tokens: z.number().optional(),
+									cache_creation_tokens: z.number().optional(),
+									audio_tokens: z.number().optional(),
+									video_tokens: z.number().optional(),
 								})
 								.optional(),
-							cost_usd_total: z.number().nullable().optional(),
-							cost_usd_input: z.number().nullable().optional(),
-							cost_usd_output: z.number().nullable().optional(),
-							cost_usd_cached_input: z.number().nullable().optional(),
+							completion_tokens_details: z
+								.object({
+									reasoning_tokens: z.number().optional(),
+									image_tokens: z.number().optional(),
+									audio_tokens: z.number().optional(),
+								})
+								.optional(),
+							cost: z.number().nullable().optional(),
+							cost_details: z
+								.object({
+									upstream_inference_cost: z.number(),
+									upstream_inference_prompt_cost: z.number(),
+									upstream_inference_completions_cost: z.number(),
+									total_cost: z.number().nullable().optional(),
+									input_cost: z.number().nullable().optional(),
+									output_cost: z.number().nullable().optional(),
+									cached_input_cost: z.number().nullable().optional(),
+									request_cost: z.number().nullable().optional(),
+									web_search_cost: z.number().nullable().optional(),
+									image_input_cost: z.number().nullable().optional(),
+									image_output_cost: z.number().nullable().optional(),
+									data_storage_cost: z.number().nullable().optional(),
+								})
+								.optional(),
 							info: z.string().optional(),
-							cost_usd_request: z.number().nullable().optional(),
 						}),
 						metadata: z.object({
+							request_id: z.string(),
 							requested_model: z.string(),
 							requested_provider: z.string().nullable(),
 							used_model: z.string(),
@@ -811,6 +912,9 @@ const completions = createRoute({
 										region: z.string().optional(),
 										status_code: z.number(),
 										error_type: z.string(),
+										succeeded: z.boolean(),
+										apiKeyHash: z.string().optional(),
+										logId: z.string().optional(),
 									}),
 								)
 								.optional(),
@@ -846,7 +950,7 @@ const completions = createRoute({
 
 chat.openapi(completions, async (c) => {
 	// Extract or generate request ID
-	const requestId = c.req.header("x-request-id") ?? shortid(40);
+	const requestId = c.req.header("x-request-id")?.trim() || shortid(40);
 
 	// Parse JSON manually even if it's malformed
 	let rawBody: unknown;
@@ -1021,17 +1125,38 @@ chat.openapi(completions, async (c) => {
 
 	// Extract custom X-LLMGateway-* headers
 	const customHeaders = extractCustomHeaders(c);
-	const requestPluginIds = plugins?.map((plugin) => plugin.id) ?? [];
+
+	// Read Responses API context from in-memory Map (set by /v1/responses proxy).
+	// Uses a lookup key passed via header; actual data is never in headers.
+	// External callers cannot exploit this: the key is a resp_ + shortid(24) that
+	// only exists in the Map for the duration of a single app.request() call, and
+	// getResponsesContext() deletes on read (one-time use).
 	const responsesContextKey = c.req.header("x-responses-context-key");
 	const responsesContext = responsesContextKey
 		? getResponsesContext(responsesContextKey)
 		: undefined;
+	const syncLogInsert = responsesContext?.syncInsert ?? false;
 	const logIdOverride = responsesContext?.logId;
-	updateLogInsertOptions(c, {
-		syncInsert: responsesContext?.syncInsert ?? false,
-		logIdOverride,
-		responsesApiData: responsesContext?.responsesApiData ?? null,
-	});
+	const responsesApiData: unknown = responsesContext?.responsesApiData ?? null;
+
+	const chatLogState = c.get("chatCompletionLogState");
+	if (chatLogState) {
+		chatLogState.syncInsert = syncLogInsert;
+		chatLogState.logIdOverride = logIdOverride;
+		chatLogState.responsesApiData = responsesApiData;
+	}
+
+	// Queue a log entry for the middleware to flush after the request completes.
+	// The middleware applies logIdOverride/responsesApiData/syncInsert from state
+	// at flush time, so we just push the raw log data here.
+	const insertLogEntry = (logData: LogInsertData): Promise<unknown> => {
+		if (chatLogState) {
+			chatLogState.pendingLogs.push(logData);
+		} else {
+			void _insertLog(logData);
+		}
+		return Promise.resolve(1);
+	};
 
 	// Check for X-No-Fallback header to disable provider fallback on low uptime
 	const xNoFallbackHeaderSet =
@@ -1160,9 +1285,6 @@ chat.openapi(completions, async (c) => {
 		});
 	}
 
-	const validatedApiKey = apiKey;
-	const validatedProject = project;
-
 	// Check if project is deleted (archived)
 	if (project.status === "deleted") {
 		throw new HTTPException(410, {
@@ -1232,35 +1354,18 @@ chat.openapi(completions, async (c) => {
 		});
 	}
 
-	updateBaseLogOptions(c, {
-		requestId,
-		project,
-		apiKey,
-		usedModel: initialRequestedModel,
-		usedModelMapping: requestedModel,
-		usedProvider: requestedProvider ?? "llmgateway",
-		requestedModel: initialRequestedModel,
-		requestedProvider,
-		messages,
-		temperature,
-		max_tokens,
-		top_p,
-		frequency_penalty,
-		presence_penalty,
-		reasoningEffort: reasoning_effort,
-		reasoningMaxTokens: reasoning_max_tokens,
-		effort,
-		responseFormat: response_format,
-		tools,
-		toolChoice: tool_choice,
-		source,
-		customHeaders,
-		debugMode,
-		userAgent,
-		imageConfig: image_config,
-		rawRequest: rawBody,
-		plugins: requestPluginIds,
-	});
+	const retryProjectContext = {
+		mode: project.mode,
+		organizationId: project.organizationId,
+	};
+	const retryOrganizationContext = {
+		id: organization.id,
+		credits: organization.credits,
+		devPlan: organization.devPlan,
+		devPlanCreditsLimit: organization.devPlanCreditsLimit,
+		devPlanCreditsUsed: organization.devPlanCreditsUsed,
+		devPlanExpiresAt: organization.devPlanExpiresAt,
+	};
 
 	// Run guardrails check for enterprise organizations
 	let guardrailResult: Awaited<ReturnType<typeof checkGuardrails>> | undefined;
@@ -1302,9 +1407,6 @@ chat.openapi(completions, async (c) => {
 				messages as Parameters<typeof applyRedactions>[0],
 				guardrailResult.redactions,
 			) as typeof messages;
-			updateBaseLogOptions(c, {
-				messages,
-			});
 		}
 
 		// Log non-blocking violations (redact/warn)
@@ -1481,8 +1583,8 @@ chat.openapi(completions, async (c) => {
 			}
 		}
 
-		// Find the cheapest model that meets our context size requirements.
-		// Only consider hardcoded models for auto selection unless free_models_only is set.
+		// Find the cheapest model that meets our context size requirements
+		// Only consider hardcoded models for auto selection
 		const allowedAutoModels = [
 			"claude-opus-4-6",
 			"claude-sonnet-4-6",
@@ -1491,175 +1593,151 @@ chat.openapi(completions, async (c) => {
 
 		let selectedModel: ModelDefinition | undefined;
 		let selectedProviders: any[] = [];
+		let lowestPrice = Number.MAX_VALUE;
+		const now = new Date(); // Cache current time for deprecation checks
 
-		async function findBestAutoRoutingCandidate(
-			candidateModels: ModelDefinition[],
-		): Promise<{
-			selectedModel: ModelDefinition;
-			selectedProviders: ProviderModelMapping[];
-		} | null> {
-			let bestModel: ModelDefinition | undefined;
-			let bestProviders: ProviderModelMapping[] = [];
-			let lowestPrice = Number.MAX_VALUE;
-			const now = new Date(); // Cache current time for deprecation checks
+		for (const modelDef of models) {
+			if (modelDef.id === "auto" || modelDef.id === "custom") {
+				continue;
+			}
 
-			for (const modelDef of candidateModels) {
-				if (modelDef.id === "auto" || modelDef.id === "custom") {
+			// When free_models_only is true, only consider models marked as free
+			// Otherwise, only consider hardcoded allowed models
+			if (free_models_only) {
+				if (!("free" in modelDef && modelDef.free)) {
 					continue;
 				}
+			} else if (!allowedAutoModels.includes(modelDef.id)) {
+				continue;
+			} else if (
+				estimatedInputTokens > 10_000 &&
+				modelDef.id === "claude-haiku-4-5"
+			) {
+				// Prefer Sonnet over Haiku for larger prompts once the input crosses 10k tokens
+				continue;
+			}
 
-				// When free_models_only is true, only consider models marked as free.
-				if (free_models_only) {
-					if (!("free" in modelDef && modelDef.free)) {
-						continue;
-					}
-				} else if (!allowedAutoModels.includes(modelDef.id)) {
-					continue;
-				} else if (
-					estimatedInputTokens > 10_000 &&
-					modelDef.id === "claude-haiku-4-5"
-				) {
-					// Prefer Sonnet over Haiku for larger prompts once the input crosses 10k tokens.
-					continue;
-				}
+			// Validate IAM rules for this candidate model and filter providers.
+			// We must re-evaluate per model because iamAllowedProviders was computed
+			// for the "auto" model which only has the "llmgateway" provider.
+			const candidateIam = await validateModelAccess(
+				apiKey.id,
+				modelDef.id,
+				undefined,
+				modelDef,
+			);
+			if (!candidateIam.allowed) {
+				continue;
+			}
+			const candidateAllowedProviders = candidateIam.allowedProviders;
 
-				// Validate IAM rules for this candidate model and filter providers.
-				// We must re-evaluate per model because iamAllowedProviders was computed
-				// for the "auto" model which only has the "llmgateway" provider.
-				const candidateIam = await validateModelAccess(
-					validatedApiKey.id,
-					modelDef.id,
-					undefined,
-					modelDef,
-				);
-				if (!candidateIam.allowed) {
-					continue;
-				}
-				const candidateAllowedProviders = candidateIam.allowedProviders;
-
-				const candidateProviders = preferConcreteRegionalMappings(
-					validatedProject.mode === "credits"
-						? filterRegionsByAvailableKeys(
-								expandAllProviderRegions(
-									modelDef.providers as ProviderModelMapping[],
-								),
-							)
-						: expandAllProviderRegions(
+			const candidateProviders = preferConcreteRegionalMappings(
+				project.mode === "credits"
+					? filterRegionsByAvailableKeys(
+							expandAllProviderRegions(
 								modelDef.providers as ProviderModelMapping[],
 							),
-				);
-				// Check if any of the model's providers are available
-				const availableModelProviders = candidateProviders.filter(
-					(provider) =>
-						availableProviders.includes(provider.providerId) &&
-						(!candidateAllowedProviders ||
-							candidateAllowedProviders.includes(provider.providerId)),
-				);
+						)
+					: expandAllProviderRegions(
+							modelDef.providers as ProviderModelMapping[],
+						),
+			);
+			// Check if any of the model's providers are available
+			const availableModelProviders = candidateProviders.filter(
+				(provider) =>
+					availableProviders.includes(provider.providerId) &&
+					(!candidateAllowedProviders ||
+						candidateAllowedProviders.includes(provider.providerId)),
+			);
 
-				// Filter by context size requirement, reasoning capability, and deprecation status
-				const suitableProviders = availableModelProviders.filter((provider) => {
-					// Skip deprecated provider mappings
-					if (provider.deprecatedAt && now > provider.deprecatedAt) {
+			// Filter by context size requirement, reasoning capability, and deprecation status
+			const suitableProviders = availableModelProviders.filter((provider) => {
+				// Skip deprecated provider mappings
+				if (provider.deprecatedAt && now > provider.deprecatedAt!) {
+					return false;
+				}
+
+				// Use the provider's context size, defaulting to a reasonable value if not specified
+				const modelContextSize = provider.contextSize ?? 8192;
+				const contextSizeMet = modelContextSize >= requiredContextSize;
+
+				// If no_reasoning is true, exclude reasoning models
+				if (no_reasoning && provider.reasoning === true) {
+					return false;
+				}
+
+				// Check reasoning capability if reasoning_effort is specified
+				if (reasoning_effort !== undefined && provider.reasoning !== true) {
+					return false;
+				}
+
+				// Check reasoning.max_tokens support if specified
+				if (
+					reasoning_max_tokens !== undefined &&
+					provider.reasoningMaxTokens !== true
+				) {
+					return false;
+				}
+
+				// Check tool capability if tools or tool_choice is specified
+				if (
+					(tools !== undefined || tool_choice !== undefined) &&
+					provider.tools !== true
+				) {
+					return false;
+				}
+
+				// Check web search capability if web search tool is requested
+				if (webSearchTool && provider.webSearch !== true) {
+					return false;
+				}
+
+				// Check JSON output capability if json_object or json_schema response format is requested
+				if (
+					response_format?.type === "json_object" ||
+					response_format?.type === "json_schema"
+				) {
+					if (provider.jsonOutput !== true) {
 						return false;
 					}
+				}
 
-					// Use the provider's context size, defaulting to a reasonable value if not specified
-					const modelContextSize = provider.contextSize ?? 8192;
-					const contextSizeMet = modelContextSize >= requiredContextSize;
-
-					// If no_reasoning is true, exclude reasoning models
-					if (no_reasoning && provider.reasoning === true) {
+				// Check JSON schema output capability if json_schema response format is requested
+				if (response_format?.type === "json_schema") {
+					if (provider.jsonOutputSchema !== true) {
 						return false;
 					}
+				}
 
-					// Check reasoning capability if reasoning_effort is specified
-					if (reasoning_effort !== undefined && provider.reasoning !== true) {
-						return false;
-					}
+				// Check vision capability if images are present in messages
+				if (hasImages && provider.vision !== true) {
+					return false;
+				}
 
-					// Check reasoning.max_tokens support if specified
-					if (
-						reasoning_max_tokens !== undefined &&
-						provider.reasoningMaxTokens !== true
-					) {
-						return false;
-					}
+				if (
+					max_tokens !== undefined &&
+					provider.maxOutput !== undefined &&
+					max_tokens > provider.maxOutput
+				) {
+					return false;
+				}
 
-					// Check tool capability if tools or tool_choice is specified
-					if (
-						(tools !== undefined || tool_choice !== undefined) &&
-						provider.tools !== true
-					) {
-						return false;
-					}
+				return contextSizeMet;
+			});
 
-					// Check web search capability if web search tool is requested
-					if (webSearchTool && provider.webSearch !== true) {
-						return false;
-					}
+			if (suitableProviders.length > 0) {
+				// Find the cheapest among the suitable providers for this model
+				for (const provider of suitableProviders) {
+					const totalPrice =
+						((provider.inputPrice ?? 0) + (provider.outputPrice ?? 0)) / 2;
 
-					// Check JSON output capability if json_object or json_schema response format is requested
-					if (
-						response_format?.type === "json_object" ||
-						response_format?.type === "json_schema"
-					) {
-						if (provider.jsonOutput !== true) {
-							return false;
-						}
-					}
-
-					// Check JSON schema output capability if json_schema response format is requested
-					if (response_format?.type === "json_schema") {
-						if (provider.jsonOutputSchema !== true) {
-							return false;
-						}
-					}
-
-					// Check vision capability if images are present in messages
-					if (hasImages && provider.vision !== true) {
-						return false;
-					}
-
-					if (
-						max_tokens !== undefined &&
-						provider.maxOutput !== undefined &&
-						max_tokens > provider.maxOutput
-					) {
-						return false;
-					}
-
-					return contextSizeMet;
-				});
-
-				if (suitableProviders.length > 0) {
-					// Find the cheapest among the suitable providers for this model
-					for (const provider of suitableProviders) {
-						const totalPrice =
-							((provider.inputPrice ?? 0) + (provider.outputPrice ?? 0)) / 2;
-
-						if (totalPrice < lowestPrice) {
-							lowestPrice = totalPrice;
-							bestModel = modelDef;
-							bestProviders = suitableProviders;
-						}
+					if (totalPrice < lowestPrice) {
+						lowestPrice = totalPrice;
+						selectedModel = modelDef;
+						selectedProviders = suitableProviders;
 					}
 				}
 			}
-
-			if (!bestModel) {
-				return null;
-			}
-
-			return {
-				selectedModel: bestModel,
-				selectedProviders: bestProviders,
-			};
-		}
-
-		const autoRoutingCandidate = await findBestAutoRoutingCandidate(models);
-		if (autoRoutingCandidate) {
-			selectedModel = autoRoutingCandidate.selectedModel;
-			selectedProviders = autoRoutingCandidate.selectedProviders;
 		}
 
 		let providerAgnosticSelectedProviders = selectedProviders;
@@ -2218,6 +2296,7 @@ chat.openapi(completions, async (c) => {
 							if (cheapestResult) {
 								usedProvider = cheapestResult.provider.providerId;
 								usedModel = cheapestResult.provider.modelName;
+								usedRegion = cheapestResult.provider.region;
 								routingMetadata = {
 									...cheapestResult.metadata,
 									selectionReason: "low-uptime-fallback",
@@ -2677,16 +2756,13 @@ chat.openapi(completions, async (c) => {
 		}
 	}
 
-	updateBaseLogOptions(c, {
-		reasoningEffort: reasoning_effort,
-	});
-
 	let url: string | undefined;
 
 	// Get the provider key for the selected provider based on project mode
 
 	let providerKey: InferSelectModel<typeof tables.providerKey> | undefined;
 	let usedToken: string | undefined;
+	let usedApiKeyHash: string | undefined;
 	let configIndex = 0; // Index for round-robin environment variables
 	let envVarName: string | undefined; // Environment variable name for health tracking
 	if (
@@ -2986,6 +3062,9 @@ chat.openapi(completions, async (c) => {
 		});
 	}
 
+	usedApiKeyHash = getApiKeyFingerprint(usedToken);
+	routingMetadata = withUsedApiKeyHash(routingMetadata, usedApiKeyHash);
+
 	const contentFilterBlocked =
 		contentFilterMode === "enabled" &&
 		contentFilterMatched &&
@@ -3000,27 +3079,66 @@ chat.openapi(completions, async (c) => {
 		.length
 		? openAIContentFilterResult.responses
 		: null;
-	updateBaseLogOptions(c, {
-		gatewayContentFilterResponse,
-	});
-	const chatCompletionLogState = c.get("chatCompletionLogState");
-	if (chatCompletionLogState) {
-		chatCompletionLogState.internalContentFilter = shouldTagContentFilter;
+
+	if (chatLogState) {
+		if (shouldTagContentFilter) {
+			chatLogState.internalContentFilter = true;
+		}
+		chatLogState.gatewayContentFilterResponse = gatewayContentFilterResponse;
 	}
+
+	const insertLog = (
+		logData: Parameters<typeof _insertLog>[0],
+		_options?: Parameters<typeof _insertLog>[1],
+	): Promise<unknown> => {
+		if (chatLogState) {
+			chatLogState.pendingLogs.push(logData as LogInsertData);
+		} else {
+			const enriched = {
+				...logData,
+				gatewayContentFilterResponse:
+					logData.gatewayContentFilterResponse ?? gatewayContentFilterResponse,
+				...(shouldTagContentFilter ? { internalContentFilter: true } : {}),
+			};
+			void _insertLog(enriched);
+		}
+		return Promise.resolve(1);
+	};
 
 	if (contentFilterBlocked) {
 		const contentFilterResponseId = `chatcmpl-${Date.now()}`;
 		const contentFilterCreated = Math.floor(Date.now() / 1000);
 
-		enqueueChatLog(
-			c,
-			{
-				providerKeyId: undefined,
-				usedModel: "",
-				usedModelMapping: undefined,
-				usedProvider: "llmgateway",
-			},
-			{
+		// Log the filtered request
+		try {
+			await insertLog({
+				...createLogEntry(
+					requestId,
+					project,
+					apiKey,
+					undefined,
+					"",
+					undefined,
+					"llmgateway",
+					requestedModel,
+					requestedProvider,
+					messages as any[],
+					temperature,
+					max_tokens,
+					top_p,
+					frequency_penalty,
+					presence_penalty,
+					undefined,
+					undefined,
+					effort as "low" | "medium" | "high" | undefined,
+					response_format,
+					tools,
+					tool_choice,
+					source,
+					customHeaders,
+					c.req.header("x-debug") === "true",
+					c.req.header("user-agent"),
+				),
 				content: null,
 				responseSize: 0,
 				finishReason: "llmgateway_content_filter",
@@ -3036,7 +3154,6 @@ chat.openapi(completions, async (c) => {
 				errorDetails: null,
 				duration: 0,
 				timeToFirstToken: null,
-				timeToFirstReasoningToken: null,
 				inputCost: 0,
 				outputCost: 0,
 				cachedInputCost: 0,
@@ -3051,10 +3168,10 @@ chat.openapi(completions, async (c) => {
 				discount: null,
 				pricingTier: null,
 				dataStorageCost: "0",
-				cached: false,
-				toolResults: null,
-			},
-		);
+			});
+		} catch {
+			// Silently ignore logging failures
+		}
 
 		if (stream) {
 			void registerStreamCompletion(c);
@@ -3146,6 +3263,7 @@ chat.openapi(completions, async (c) => {
 			configIndex,
 			isImageGeneration,
 			usedRegion,
+			providerKey !== undefined,
 		);
 
 		// If region is still unset but the provider supports regions, resolve the
@@ -3279,6 +3397,46 @@ chat.openapi(completions, async (c) => {
 					}
 				}
 
+				// Log the cached streaming request with reconstructed content
+				// Extract plugin IDs for logging (cached streaming)
+				const cachedStreamingPluginIds = plugins?.map((p) => p.id) ?? [];
+
+				const baseLogEntry = createLogEntry(
+					requestId,
+					project,
+					apiKey,
+					providerKey?.id,
+					usedModelFormatted,
+					usedModelMapping,
+					usedProvider,
+					initialRequestedModel,
+					requestedProvider,
+					messages,
+					temperature,
+					max_tokens,
+					top_p,
+					frequency_penalty,
+					presence_penalty,
+					reasoning_effort,
+					reasoning_max_tokens,
+					effort,
+					response_format,
+					tools,
+					tool_choice,
+					source,
+					customHeaders,
+					debugMode,
+					userAgent,
+					image_config,
+					routingMetadata,
+					rawBody,
+					rawCachedResponseData, // Raw SSE data from cached response
+					null, // No upstream request for cached response
+					rawCachedResponseData, // Raw SSE data from cached response (same for both)
+					cachedStreamingPluginIds,
+					undefined, // No plugin results for cached response
+				);
+
 				// Calculate costs for cached response
 				const costs = await calculateCosts(
 					usedModel,
@@ -3295,90 +3453,56 @@ chat.openapi(completions, async (c) => {
 					project.organizationId,
 				);
 
-				enqueueChatLog(
-					c,
-					{
-						providerKeyId: providerKey?.id,
-						usedModel: usedModelFormatted,
-						usedModelMapping,
-						usedProvider,
-						requestedModel: initialRequestedModel,
-						requestedProvider,
-						messages,
-						temperature,
-						max_tokens,
-						top_p,
-						frequency_penalty,
-						presence_penalty,
-						reasoningEffort: reasoning_effort,
-						reasoningMaxTokens: reasoning_max_tokens,
-						effort,
-						responseFormat: response_format,
-						tools,
-						toolChoice: tool_choice,
-						source,
-						customHeaders,
-						debugMode,
-						userAgent,
-						imageConfig: image_config,
-						routingMetadata,
-						rawRequest: rawBody,
-						rawResponse: rawCachedResponseData,
-						upstreamRequest: null,
-						upstreamResponse: rawCachedResponseData,
-						plugins: requestPluginIds,
-						pluginResults: undefined,
-					},
-					{
-						duration: 0,
-						timeToFirstToken: null,
-						timeToFirstReasoningToken: null,
-						responseSize: cachedResponseSize,
-						content: fullContent || null,
-						reasoningContent: fullReasoningContent || null,
-						finishReason: cachedStreamingResponse.metadata.finishReason,
-						promptTokens:
-							(costs.promptTokens ?? promptTokens)?.toString() ?? null,
-						completionTokens: completionTokens?.toString() ?? null,
-						totalTokens: costs.imageInputTokens
-							? (
-									(costs.promptTokens ?? promptTokens ?? 0) +
-									(completionTokens ?? 0) +
-									(reasoningTokens ?? 0)
-								).toString()
-							: (totalTokens?.toString() ?? null),
-						reasoningTokens: reasoningTokens?.toString() ?? null,
-						cachedTokens: cachedTokens?.toString() ?? null,
-						hasError: false,
-						streamed: true,
-						canceled: false,
-						errorDetails: null,
-						inputCost: costs.inputCost ?? 0,
-						outputCost: costs.outputCost ?? 0,
-						cachedInputCost: costs.cachedInputCost ?? 0,
-						requestCost: costs.requestCost ?? 0,
-						webSearchCost: costs.webSearchCost ?? 0,
-						imageInputTokens: costs.imageInputTokens?.toString() ?? null,
-						imageOutputTokens: costs.imageOutputTokens?.toString() ?? null,
-						imageInputCost: costs.imageInputCost ?? null,
-						imageOutputCost: costs.imageOutputCost ?? null,
-						cost: costs.totalCost ?? 0,
-						estimatedCost: costs.estimatedCost,
-						discount: costs.discount ?? null,
-						pricingTier: costs.pricingTier ?? null,
-						dataStorageCost: calculateDataStorageCost(
-							costs.promptTokens ?? promptTokens,
-							cachedTokens,
-							completionTokens,
-							reasoningTokens,
-							retentionLevel,
-						),
-						cached: true,
-						toolResults:
-							(cachedStreamingResponse.metadata as { toolResults?: any })
-								?.toolResults ?? null,
-					},
-				);
+				await insertLogEntry({
+					...baseLogEntry,
+					duration: 0, // No processing time for cached response
+					timeToFirstToken: null, // Not applicable for cached response
+					timeToFirstReasoningToken: null, // Not applicable for cached response
+					responseSize: cachedResponseSize,
+					content: fullContent || null,
+					reasoningContent: fullReasoningContent || null,
+					finishReason: cachedStreamingResponse.metadata.finishReason,
+					promptTokens:
+						(costs.promptTokens ?? promptTokens)?.toString() ?? null,
+					completionTokens: completionTokens?.toString() ?? null,
+					totalTokens: costs.imageInputTokens
+						? (
+								(costs.promptTokens ?? promptTokens ?? 0) +
+								(completionTokens ?? 0) +
+								(reasoningTokens ?? 0)
+							).toString()
+						: (totalTokens?.toString() ?? null),
+					reasoningTokens: reasoningTokens?.toString() ?? null,
+					cachedTokens: cachedTokens?.toString() ?? null,
+					hasError: false,
+					streamed: true,
+					canceled: false,
+					errorDetails: null,
+					inputCost: costs.inputCost ?? 0,
+					outputCost: costs.outputCost ?? 0,
+					cachedInputCost: costs.cachedInputCost ?? 0,
+					requestCost: costs.requestCost ?? 0,
+					webSearchCost: costs.webSearchCost ?? 0,
+					imageInputTokens: costs.imageInputTokens?.toString() ?? null,
+					imageOutputTokens: costs.imageOutputTokens?.toString() ?? null,
+					imageInputCost: costs.imageInputCost ?? null,
+					imageOutputCost: costs.imageOutputCost ?? null,
+					cost: costs.totalCost ?? 0,
+					estimatedCost: costs.estimatedCost,
+					discount: costs.discount ?? null,
+					pricingTier: costs.pricingTier ?? null,
+					dataStorageCost: calculateDataStorageCost(
+						costs.promptTokens ?? promptTokens,
+						cachedTokens,
+						completionTokens,
+						reasoningTokens,
+						retentionLevel,
+					),
+					cached: true,
+					toolResults:
+						(cachedStreamingResponse.metadata as { toolResults?: any })
+							?.toolResults ?? null,
+				});
 
 				// Return cached streaming response by replaying chunks with original timing
 				void registerStreamCompletion(c);
@@ -3420,6 +3544,7 @@ chat.openapi(completions, async (c) => {
 						} else {
 							logger.error("Error replaying cached stream", error);
 						}
+						finishStreamCompletion(c);
 					},
 				);
 			}
@@ -3427,8 +3552,49 @@ chat.openapi(completions, async (c) => {
 			cacheKey = generateCacheKey(cachePayload);
 			const cachedResponse = cacheKey ? await getCache(cacheKey) : null;
 			if (cachedResponse) {
+				const responseForCurrentRequest =
+					withCurrentRequestMetadataOnOpenAiResponse(cachedResponse, requestId);
+
 				// Log the cached request
 				const duration = 0; // No processing time needed
+				// Extract plugin IDs for logging (cached non-streaming)
+				const cachedPluginIds = plugins?.map((p) => p.id) ?? [];
+
+				const baseLogEntry = createLogEntry(
+					requestId,
+					project,
+					apiKey,
+					providerKey?.id,
+					usedModelFormatted,
+					usedModelMapping,
+					usedProvider,
+					initialRequestedModel,
+					requestedProvider,
+					messages,
+					temperature,
+					max_tokens,
+					top_p,
+					frequency_penalty,
+					presence_penalty,
+					reasoning_effort,
+					reasoning_max_tokens,
+					effort,
+					response_format,
+					tools,
+					tool_choice,
+					source,
+					customHeaders,
+					debugMode,
+					userAgent,
+					image_config,
+					routingMetadata,
+					rawBody,
+					responseForCurrentRequest,
+					null, // No upstream request for cached response
+					responseForCurrentRequest, // upstream response is same as cached response
+					cachedPluginIds,
+					undefined, // No plugin results for cached response
+				);
 
 				// Calculate costs for cached response
 				const cachedCosts = await calculateCosts(
@@ -3455,98 +3621,61 @@ chat.openapi(completions, async (c) => {
 					(cachedReasoningContent?.length ?? 0) +
 					500; // overhead for metadata
 
-				enqueueChatLog(
-					c,
-					{
-						providerKeyId: providerKey?.id,
-						usedModel: usedModelFormatted,
-						usedModelMapping,
-						usedProvider,
-						requestedModel: initialRequestedModel,
-						requestedProvider,
-						messages,
-						temperature,
-						max_tokens,
-						top_p,
-						frequency_penalty,
-						presence_penalty,
-						reasoningEffort: reasoning_effort,
-						reasoningMaxTokens: reasoning_max_tokens,
-						effort,
-						responseFormat: response_format,
-						tools,
-						toolChoice: tool_choice,
-						source,
-						customHeaders,
-						debugMode,
-						userAgent,
-						imageConfig: image_config,
-						routingMetadata,
-						rawRequest: rawBody,
-						rawResponse: cachedResponse,
-						upstreamRequest: null,
-						upstreamResponse: cachedResponse,
-						plugins: requestPluginIds,
-						pluginResults: undefined,
-					},
-					{
-						duration,
-						timeToFirstToken: null,
-						timeToFirstReasoningToken: null,
-						responseSize: estimatedCachedSize,
-						content: cachedContent ?? null,
-						reasoningContent: cachedReasoningContent ?? null,
-						finishReason: cachedResponse.choices?.[0]?.finish_reason ?? null,
-						promptTokens:
-							(
-								cachedCosts.promptTokens ?? cachedResponse.usage?.prompt_tokens
-							)?.toString() ?? null,
-						completionTokens: cachedResponse.usage?.completion_tokens ?? null,
-						totalTokens: cachedCosts.imageInputTokens
-							? (
-									(cachedCosts.promptTokens ??
-										cachedResponse.usage?.prompt_tokens ??
-										0) +
-									(cachedResponse.usage?.completion_tokens ?? 0) +
-									(cachedResponse.usage?.reasoning_tokens ?? 0)
-								).toString()
-							: (cachedResponse.usage?.total_tokens ?? null),
-						reasoningTokens: cachedResponse.usage?.reasoning_tokens ?? null,
-						cachedTokens:
-							cachedResponse.usage?.prompt_tokens_details?.cached_tokens ??
-							null,
-						hasError: false,
-						streamed: false,
-						canceled: false,
-						errorDetails: null,
-						inputCost: cachedCosts.inputCost ?? 0,
-						outputCost: cachedCosts.outputCost ?? 0,
-						cachedInputCost: cachedCosts.cachedInputCost ?? 0,
-						requestCost: cachedCosts.requestCost ?? 0,
-						webSearchCost: cachedCosts.webSearchCost ?? 0,
-						imageInputTokens: cachedCosts.imageInputTokens?.toString() ?? null,
-						imageOutputTokens:
-							cachedCosts.imageOutputTokens?.toString() ?? null,
-						imageInputCost: cachedCosts.imageInputCost ?? null,
-						imageOutputCost: cachedCosts.imageOutputCost ?? null,
-						cost: cachedCosts.totalCost ?? 0,
-						estimatedCost: cachedCosts.estimatedCost,
-						discount: cachedCosts.discount ?? null,
-						pricingTier: cachedCosts.pricingTier ?? null,
-						dataStorageCost: calculateDataStorageCost(
-							cachedCosts.promptTokens ?? cachedResponse.usage?.prompt_tokens,
-							cachedResponse.usage?.prompt_tokens_details?.cached_tokens,
-							cachedResponse.usage?.completion_tokens,
-							cachedResponse.usage?.reasoning_tokens,
-							retentionLevel,
-						),
-						cached: true,
-						toolResults:
-							cachedResponse.choices?.[0]?.message?.tool_calls ?? null,
-					},
-				);
+				await insertLogEntry({
+					...baseLogEntry,
+					duration,
+					timeToFirstToken: null, // Not applicable for cached response
+					timeToFirstReasoningToken: null, // Not applicable for cached response
+					responseSize: estimatedCachedSize,
+					content: cachedContent ?? null,
+					reasoningContent: cachedReasoningContent ?? null,
+					finishReason: cachedResponse.choices?.[0]?.finish_reason ?? null,
+					promptTokens:
+						(
+							cachedCosts.promptTokens ?? cachedResponse.usage?.prompt_tokens
+						)?.toString() ?? null,
+					completionTokens: cachedResponse.usage?.completion_tokens ?? null,
+					totalTokens: cachedCosts.imageInputTokens
+						? (
+								(cachedCosts.promptTokens ??
+									cachedResponse.usage?.prompt_tokens ??
+									0) +
+								(cachedResponse.usage?.completion_tokens ?? 0) +
+								(cachedResponse.usage?.reasoning_tokens ?? 0)
+							).toString()
+						: (cachedResponse.usage?.total_tokens ?? null),
+					reasoningTokens: cachedResponse.usage?.reasoning_tokens ?? null,
+					cachedTokens:
+						cachedResponse.usage?.prompt_tokens_details?.cached_tokens ?? null,
+					hasError: false,
+					streamed: false,
+					canceled: false,
+					errorDetails: null,
+					inputCost: cachedCosts.inputCost ?? 0,
+					outputCost: cachedCosts.outputCost ?? 0,
+					cachedInputCost: cachedCosts.cachedInputCost ?? 0,
+					requestCost: cachedCosts.requestCost ?? 0,
+					webSearchCost: cachedCosts.webSearchCost ?? 0,
+					imageInputTokens: cachedCosts.imageInputTokens?.toString() ?? null,
+					imageOutputTokens: cachedCosts.imageOutputTokens?.toString() ?? null,
+					imageInputCost: cachedCosts.imageInputCost ?? null,
+					imageOutputCost: cachedCosts.imageOutputCost ?? null,
+					cost: cachedCosts.totalCost ?? 0,
+					estimatedCost: cachedCosts.estimatedCost,
+					discount: cachedCosts.discount ?? null,
+					pricingTier: cachedCosts.pricingTier ?? null,
+					dataStorageCost: calculateDataStorageCost(
+						cachedCosts.promptTokens ?? cachedResponse.usage?.prompt_tokens,
+						cachedResponse.usage?.prompt_tokens_details?.cached_tokens,
+						cachedResponse.usage?.completion_tokens,
+						cachedResponse.usage?.reasoning_tokens,
+						retentionLevel,
+					),
+					cached: true,
+					toolResults: cachedResponse.choices?.[0]?.message?.tool_calls ?? null,
+				});
 
-				return c.json(cachedResponse);
+				return c.json(responseForCurrentRequest);
 			}
 		}
 	}
@@ -3577,13 +3706,20 @@ chat.openapi(completions, async (c) => {
 	// Check if streaming is requested and if the model/provider combination supports it
 	// For image generation models, we'll fake streaming by converting the response
 	const fakeStreamingForImageGen = stream && isImageGeneration;
-	const effectiveStream = fakeStreamingForImageGen ? false : stream;
+	const streamingSupport = getModelStreamingSupport(
+		baseModelName,
+		usedProvider,
+		usedRegion,
+	);
+	// When the provider only supports streaming, force it even if the client didn't request it.
+	// The upstream request uses effectiveStream; the client response uses stream.
+	const forceStream = streamingSupport === "only" && !stream;
+	const effectiveStream = fakeStreamingForImageGen
+		? false
+		: stream || forceStream;
 
 	if (stream) {
-		if (
-			!isImageGeneration &&
-			getModelStreamingSupport(baseModelName, usedProvider) === false
-		) {
+		if (!isImageGeneration && streamingSupport === false) {
 			throw new HTTPException(400, {
 				message: `Model ${usedModel} with provider ${usedProvider} does not support streaming`,
 			});
@@ -3700,39 +3836,7 @@ chat.openapi(completions, async (c) => {
 		}
 	}
 
-	// For Moonshot provider, enrich assistant messages with cached reasoning_content
-	// This is needed for multi-turn tool call conversations with thinking models
-	// Moonshot requires reasoning_content in assistant messages with tool_calls
-	if (usedProvider === "moonshot") {
-		const { redisClient } = await import("@llmgateway/cache");
-		for (const message of messages) {
-			if (
-				message.role === "assistant" &&
-				message.tool_calls &&
-				Array.isArray(message.tool_calls) &&
-				message.tool_calls.length > 0 &&
-				!(message as any).reasoning_content // Only add if not already present
-			) {
-				// Get reasoning_content from the first tool call (all tool calls share the same reasoning)
-				const firstToolCall = message.tool_calls[0];
-				if (firstToolCall?.id) {
-					try {
-						const cachedReasoningContent = await redisClient.get(
-							`reasoning_content:${firstToolCall.id}`,
-						);
-						if (cachedReasoningContent) {
-							// Add reasoning_content to the message for Moonshot
-							(message as any).reasoning_content = cachedReasoningContent;
-						}
-					} catch {
-						// Silently fail - reasoning_content caching is optional
-					}
-				}
-			}
-		}
-	}
-
-	let requestBody: ProviderRequestBody = await prepareRequestBody(
+	let requestBody: ProviderRequestBody | FormData = await prepareRequestBody(
 		usedProvider,
 		upstreamModelName,
 		messages as BaseMessage[],
@@ -3761,6 +3865,7 @@ chat.openapi(completions, async (c) => {
 
 	// Validate effective max_tokens value after prepareRequestBody
 	if (
+		!(requestBody instanceof FormData) &&
 		hasMaxTokens(requestBody) &&
 		requestBody.max_tokens !== undefined &&
 		finalModelInfo
@@ -3790,16 +3895,171 @@ chat.openapi(completions, async (c) => {
 		isImageGeneration &&
 		usedProvider === "xai" &&
 		url &&
+		!(requestBody instanceof FormData) &&
 		("image" in requestBody || "images" in requestBody)
 	) {
 		url = url.replace("/v1/images/generations", "/v1/images/edits");
 	}
 
+	// Switch OpenAI image generation endpoint to /edits when input images are present.
+	// prepareRequestBody returns a FormData (multipart/form-data) only for this edits flow.
+	if (
+		isImageGeneration &&
+		usedProvider === "openai" &&
+		url &&
+		requestBody instanceof FormData
+	) {
+		url = url.replace("/v1/images/generations", "/v1/images/edits");
+	}
+
 	const startTime = Date.now();
+	const failedEnvKeyIndicesByProvider = new Map<string, Set<number>>();
+	const failedTrackedKeyIdsByProvider = new Map<string, Set<string>>();
+
+	function rememberFailedKey(
+		providerId: string,
+		region: string | undefined,
+		options: {
+			envVarName?: string;
+			configIndex?: number;
+			providerKeyId?: string;
+		},
+	): void {
+		const retryKey = providerRetryKey(providerId, region);
+
+		if (options.envVarName !== undefined && options.configIndex !== undefined) {
+			const failedIndices =
+				failedEnvKeyIndicesByProvider.get(retryKey) ?? new Set<number>();
+			failedIndices.add(options.configIndex);
+			failedEnvKeyIndicesByProvider.set(retryKey, failedIndices);
+		}
+
+		if (options.providerKeyId) {
+			const failedKeyIds =
+				failedTrackedKeyIdsByProvider.get(retryKey) ?? new Set<string>();
+			failedKeyIds.add(options.providerKeyId);
+			failedTrackedKeyIdsByProvider.set(retryKey, failedKeyIds);
+		}
+	}
+
+	async function resolveProviderContextForRetry(
+		providerMapping: {
+			providerId: string;
+			modelName: string;
+			region?: string;
+		},
+		streamValue: boolean,
+	) {
+		const retryKey = providerRetryKey(
+			providerMapping.providerId,
+			providerMapping.region,
+		);
+		return await resolveProviderContext(
+			providerMapping,
+			retryProjectContext,
+			retryOrganizationContext,
+			modelInfo,
+			originalRequestParams,
+			{
+				requestId,
+				stream: streamValue,
+				effectiveStream,
+				messages: messages as BaseMessage[],
+				response_format,
+				tools,
+				tool_choice,
+				reasoning_effort,
+				reasoning_max_tokens,
+				effort,
+				webSearchTool,
+				image_config,
+				sensitive_word_check,
+				maxImageSizeMB,
+				userPlan,
+				hasExistingToolCalls,
+				customProviderName,
+				webSearchEnabled: !!webSearchTool,
+				excludedEnvKeyIndices: failedEnvKeyIndicesByProvider.get(retryKey),
+				excludedProviderKeyIds: failedTrackedKeyIdsByProvider.get(retryKey),
+			},
+		);
+	}
+
+	function applyResolvedProviderContext(
+		ctx: Awaited<ReturnType<typeof resolveProviderContext>>,
+	): void {
+		usedProvider = ctx.usedProvider;
+		usedModel = ctx.usedModel;
+		usedModelFormatted = ctx.usedModelFormatted;
+		usedModelMapping = ctx.usedModelMapping;
+		baseModelName = ctx.baseModelName;
+		usedToken = ctx.usedToken;
+		usedApiKeyHash = ctx.usedApiKeyHash;
+		providerKey = ctx.providerKey;
+		configIndex = ctx.configIndex;
+		envVarName = ctx.envVarName;
+		url = ctx.url;
+		requestBody = ctx.requestBody;
+		useResponsesApi = ctx.useResponsesApi;
+		requestCanBeCanceled = ctx.requestCanBeCanceled;
+		isImageGeneration = ctx.isImageGeneration;
+		supportsReasoning = ctx.supportsReasoning;
+		splitTaggedReasoning = ctx.splitTaggedReasoning ?? false;
+		temperature = ctx.temperature;
+		max_tokens = ctx.max_tokens;
+		top_p = ctx.top_p;
+		frequency_penalty = ctx.frequency_penalty;
+		presence_penalty = ctx.presence_penalty;
+		usedRegion = ctx.usedRegion;
+		routingMetadata = withUsedApiKeyHash(routingMetadata, usedApiKeyHash);
+	}
+
+	async function tryResolveAlternateKeyForCurrentProvider(
+		streamValue: boolean,
+	): Promise<Awaited<ReturnType<typeof resolveProviderContext>> | null> {
+		if (!usedProvider || !usedModel) {
+			return null;
+		}
+
+		const currentProviderKeyId = providerKey?.id;
+		const currentEnvVarName = envVarName;
+		const currentConfigIndex = configIndex;
+		const currentToken = usedToken;
+
+		try {
+			const nextContext = await resolveProviderContextForRetry(
+				{
+					providerId: usedProvider,
+					modelName: usedModel,
+					region: usedRegion,
+				},
+				streamValue,
+			);
+
+			const isDifferentTrackedKey =
+				nextContext.providerKey?.id !== undefined &&
+				nextContext.providerKey.id !== currentProviderKeyId;
+			const isDifferentEnvKey =
+				nextContext.envVarName !== undefined &&
+				(nextContext.envVarName !== currentEnvVarName ||
+					nextContext.configIndex !== currentConfigIndex);
+			const isDifferentToken = nextContext.usedToken !== currentToken;
+
+			if (!isDifferentTrackedKey && !isDifferentEnvKey && !isDifferentToken) {
+				return null;
+			}
+
+			return nextContext;
+		} catch {
+			return null;
+		}
+	}
 
 	// Handle streaming response if requested
 	// For image generation models, we skip real streaming and use fake streaming later
-	if (effectiveStream) {
+	// For stream-only models where the client didn't request streaming, use the non-streaming path
+	// (effectiveStream forces streaming upstream, but the client gets a regular JSON response)
+	if (effectiveStream && !forceStream) {
 		void registerStreamCompletion(c);
 		return streamSSE(
 			c,
@@ -3907,6 +4167,13 @@ chat.openapi(completions, async (c) => {
 							0,
 							project.organizationId,
 						);
+						streamingCosts.dataStorageCost = toDataStorageCostNumber(
+							streamingCosts.promptTokens ?? promptTokenCount,
+							null,
+							0,
+							null,
+							retentionLevel,
+						);
 
 						await writeSSEAndCache({
 							data: JSON.stringify({
@@ -3926,6 +4193,27 @@ chat.openapi(completions, async (c) => {
 							id: String(eventId++),
 						});
 
+						const contentFilterUsage: Record<string, any> = {
+							prompt_tokens: promptTokenCount,
+							completion_tokens: 0,
+							total_tokens: promptTokenCount,
+						};
+						applyExtendedUsageFields(contentFilterUsage, {
+							costs: {
+								inputCost: streamingCosts.inputCost,
+								outputCost: streamingCosts.outputCost,
+								cachedInputCost: streamingCosts.cachedInputCost,
+								requestCost: streamingCosts.requestCost,
+								webSearchCost: streamingCosts.webSearchCost,
+								imageInputCost: streamingCosts.imageInputCost,
+								imageOutputCost: streamingCosts.imageOutputCost,
+								totalCost: streamingCosts.totalCost,
+								dataStorageCost: streamingCosts.dataStorageCost,
+							},
+							cachedTokens: null,
+							cacheCreationTokens: null,
+							reasoningTokens: null,
+						});
 						await writeSSEAndCache({
 							data: JSON.stringify({
 								id: `chatcmpl-${Date.now()}`,
@@ -3939,18 +4227,7 @@ chat.openapi(completions, async (c) => {
 										finish_reason: null,
 									},
 								],
-								usage: {
-									prompt_tokens: promptTokenCount,
-									completion_tokens: 0,
-									total_tokens: promptTokenCount,
-									cost_usd_total: streamingCosts.totalCost,
-									cost_usd_input: streamingCosts.inputCost,
-									cost_usd_output: streamingCosts.outputCost,
-									cost_usd_cached_input: streamingCosts.cachedInputCost,
-									cost_usd_request: streamingCosts.requestCost,
-									cost_usd_image_input: streamingCosts.imageInputCost,
-									cost_usd_image_output: streamingCosts.imageOutputCost,
-								},
+								usage: contentFilterUsage,
 							}),
 							id: String(eventId++),
 						});
@@ -4040,65 +4317,11 @@ chat.openapi(completions, async (c) => {
 							}
 
 							try {
-								const ctx = await resolveProviderContext(
+								const ctx = await resolveProviderContextForRetry(
 									nextProvider,
-									{
-										mode: project.mode,
-										organizationId: project.organizationId,
-									},
-									{
-										id: organization.id,
-										credits: organization.credits,
-										devPlan: organization.devPlan,
-										devPlanCreditsLimit: organization.devPlanCreditsLimit,
-										devPlanCreditsUsed: organization.devPlanCreditsUsed,
-										devPlanExpiresAt: organization.devPlanExpiresAt,
-									},
-									modelInfo,
-									originalRequestParams,
-									{
-										requestId,
-										stream: true,
-										effectiveStream,
-										messages: messages as BaseMessage[],
-										response_format,
-										tools,
-										tool_choice,
-										reasoning_effort,
-										reasoning_max_tokens,
-										effort,
-										webSearchTool,
-										image_config,
-										sensitive_word_check,
-										maxImageSizeMB,
-										userPlan,
-										hasExistingToolCalls,
-										customProviderName,
-										webSearchEnabled: !!webSearchTool,
-									},
+									true,
 								);
-								usedProvider = ctx.usedProvider;
-								usedModel = ctx.usedModel;
-								usedModelFormatted = ctx.usedModelFormatted;
-								usedModelMapping = ctx.usedModelMapping;
-								baseModelName = ctx.baseModelName;
-								usedToken = ctx.usedToken;
-								providerKey = ctx.providerKey;
-								configIndex = ctx.configIndex;
-								envVarName = ctx.envVarName;
-								url = ctx.url;
-								requestBody = ctx.requestBody;
-								useResponsesApi = ctx.useResponsesApi;
-								requestCanBeCanceled = ctx.requestCanBeCanceled;
-								isImageGeneration = ctx.isImageGeneration;
-								supportsReasoning = ctx.supportsReasoning;
-								splitTaggedReasoning = ctx.splitTaggedReasoning ?? false;
-								temperature = ctx.temperature;
-								max_tokens = ctx.max_tokens;
-								top_p = ctx.top_p;
-								frequency_penalty = ctx.frequency_penalty;
-								presence_penalty = ctx.presence_penalty;
-								usedRegion = ctx.usedRegion;
+								applyResolvedProviderContext(ctx);
 							} catch {
 								failedProviderIds.add(
 									providerRetryKey(
@@ -4114,6 +4337,7 @@ chat.openapi(completions, async (c) => {
 
 						try {
 							const headers = getProviderHeaders(usedProvider, usedToken, {
+								requestId,
 								webSearchEnabled: !!webSearchTool,
 							});
 							headers["Content-Type"] = "application/json";
@@ -4171,6 +4395,20 @@ chat.openapi(completions, async (c) => {
 									),
 								});
 
+								// Log the timeout error in the database
+								const timeoutPluginIds = plugins?.map((p) => p.id) ?? [];
+
+								let sameProviderRetryContext: Awaited<
+									ReturnType<typeof resolveProviderContext>
+								> | null = null;
+								rememberFailedKey(usedProvider, usedRegion, {
+									envVarName,
+									configIndex,
+									providerKeyId: providerKey?.id,
+								});
+								sameProviderRetryContext =
+									await tryResolveAlternateKeyForCurrentProvider(true);
+
 								// Check if we should retry before logging so we can mark the log as retried
 								const willRetryTimeout = shouldRetryRequest({
 									requestedProvider,
@@ -4183,88 +4421,121 @@ chat.openapi(completions, async (c) => {
 										1,
 									usedProvider,
 								});
+								const willRetrySameProvider = sameProviderRetryContext !== null;
+								const willRetryRequest =
+									willRetrySameProvider || willRetryTimeout;
 
-								enqueueChatLog(
-									c,
-									{
-										providerKeyId: providerKey?.id,
-										usedModel: usedModelFormatted,
-										usedModelMapping,
-										usedProvider,
-										requestedModel: initialRequestedModel,
-										requestedProvider,
-										messages,
-										temperature,
-										max_tokens,
-										top_p,
-										frequency_penalty,
-										presence_penalty,
-										reasoningEffort: reasoning_effort,
-										reasoningMaxTokens: reasoning_max_tokens,
-										effort,
-										responseFormat: response_format,
-										tools,
-										toolChoice: tool_choice,
-										source,
-										customHeaders,
-										debugMode,
-										userAgent,
-										imageConfig: image_config,
-										routingMetadata,
-										rawRequest: rawBody,
-										rawResponse: null,
-										upstreamRequest: requestBody,
-										upstreamResponse: null,
-										plugins: requestPluginIds,
-										pluginResults: undefined,
-									},
-									{
-										duration: Date.now() - perAttemptStartTime,
-										timeToFirstToken: null,
-										timeToFirstReasoningToken: null,
-										responseSize: 0,
-										content: null,
-										reasoningContent: null,
-										finishReason: "upstream_error",
-										promptTokens: null,
-										completionTokens: null,
-										totalTokens: null,
-										reasoningTokens: null,
-										cachedTokens: null,
-										hasError: true,
-										streamed: true,
-										canceled: false,
-										errorDetails: {
-											statusCode: 0,
-											statusText: "TimeoutError",
-											responseText: errorMessage,
-											cause: timeoutCause,
-										},
-										cachedInputCost: null,
-										requestCost: null,
-										webSearchCost: null,
-										imageInputTokens: null,
-										imageOutputTokens: null,
-										imageInputCost: null,
-										imageOutputCost: null,
-										discount: null,
-										dataStorageCost: "0",
-										cached: false,
-										toolResults: null,
-										retried: willRetryTimeout,
-										retriedByLogId: willRetryTimeout ? finalLogId : null,
-									},
+								const baseLogEntry = createLogEntry(
+									requestId,
+									project,
+									apiKey,
+									providerKey?.id,
+									usedModelFormatted,
+									usedModelMapping,
+									usedProvider,
+									initialRequestedModel,
+									requestedProvider,
+									messages,
+									temperature,
+									max_tokens,
+									top_p,
+									frequency_penalty,
+									presence_penalty,
+									reasoning_effort,
+									reasoning_max_tokens,
+									effort,
+									response_format,
+									tools,
+									tool_choice,
+									source,
+									customHeaders,
+									debugMode,
+									userAgent,
+									image_config,
+									routingMetadata,
+									rawBody,
+									null, // No response for timeout error
+									requestBody,
+									null, // No upstream response for timeout error
+									timeoutPluginIds,
+									undefined, // No plugin results for error case
 								);
+								const attemptLogId = shortid();
+
+								await insertLogEntry({
+									...baseLogEntry,
+									id: attemptLogId,
+									duration: Date.now() - perAttemptStartTime,
+									timeToFirstToken: null,
+									timeToFirstReasoningToken: null,
+									responseSize: 0,
+									content: null,
+									reasoningContent: null,
+									finishReason: "upstream_error",
+									promptTokens: null,
+									completionTokens: null,
+									totalTokens: null,
+									reasoningTokens: null,
+									cachedTokens: null,
+									hasError: true,
+									streamed: true,
+									canceled: false,
+									errorDetails: {
+										statusCode: 0,
+										statusText: "TimeoutError",
+										responseText: errorMessage,
+										cause: timeoutCause,
+									},
+									cachedInputCost: null,
+									requestCost: null,
+									webSearchCost: null,
+									imageInputTokens: null,
+									imageOutputTokens: null,
+									imageInputCost: null,
+									imageOutputCost: null,
+									discount: null,
+									dataStorageCost: "0",
+									cached: false,
+									toolResults: null,
+									retried: willRetryRequest,
+									retriedByLogId: willRetryRequest ? finalLogId : null,
+								});
+
+								if (willRetrySameProvider && sameProviderRetryContext) {
+									routingAttempts.push(
+										buildRoutingAttempt(
+											usedProvider,
+											baseModelName,
+											0,
+											getErrorType(0),
+											false,
+											{
+												region: usedRegion,
+												apiKeyHash: usedApiKeyHash,
+												logId: attemptLogId,
+											},
+										),
+									);
+									applyResolvedProviderContext(sameProviderRetryContext);
+									retryAttempt--;
+									continue;
+								}
 
 								if (willRetryTimeout) {
-									routingAttempts.push({
-										provider: usedProvider,
-										model: baseModelName,
-										...(usedRegion && { region: usedRegion }),
-										status_code: 0,
-										error_type: getErrorType(0),
-										succeeded: false,
-									});
+									routingAttempts.push(
+										buildRoutingAttempt(
+											usedProvider,
+											baseModelName,
+											0,
+											getErrorType(0),
+											false,
+											{
+												region: usedRegion,
+												apiKeyHash: usedApiKeyHash,
+												logId: attemptLogId,
+											},
+										),
+									);
 									failedProviderIds.add(
 										providerRetryKey(usedProvider, usedRegion),
 									);
@@ -4287,6 +4558,10 @@ chat.openapi(completions, async (c) => {
 								error instanceof Error &&
 								error.name === "AbortError"
 							) {
+								// Log the canceled request
+								// Extract plugin IDs for logging (canceled request)
+								const canceledPluginIds = plugins?.map((p) => p.id) ?? [];
+
 								// Calculate costs for cancelled request if billing is enabled
 								const billCancelled = shouldBillCancelledRequests();
 								let cancelledCosts: Awaited<
@@ -4329,92 +4604,94 @@ chat.openapi(completions, async (c) => {
 									);
 								}
 
-								enqueueChatLog(
-									c,
-									{
-										providerKeyId: providerKey?.id,
-										usedModel: usedModelFormatted,
-										usedModelMapping,
-										usedProvider,
-										requestedModel: initialRequestedModel,
-										requestedProvider,
-										messages,
-										temperature,
-										max_tokens,
-										top_p,
-										frequency_penalty,
-										presence_penalty,
-										reasoningEffort: reasoning_effort,
-										reasoningMaxTokens: reasoning_max_tokens,
-										effort,
-										responseFormat: response_format,
-										tools,
-										toolChoice: tool_choice,
-										source,
-										customHeaders,
-										debugMode,
-										userAgent,
-										imageConfig: image_config,
-										routingMetadata,
-										rawRequest: rawBody,
-										rawResponse: null,
-										upstreamRequest: requestBody,
-										upstreamResponse: null,
-										plugins: requestPluginIds,
-										pluginResults: undefined,
-									},
-									{
-										duration: Date.now() - perAttemptStartTime,
-										timeToFirstToken: null,
-										timeToFirstReasoningToken: null,
-										responseSize: 0,
-										content: null,
-										reasoningContent: null,
-										finishReason: "canceled",
-										promptTokens: billCancelled
-											? (
-													cancelledCosts?.promptTokens ?? estimatedPromptTokens
-												)?.toString()
-											: null,
-										completionTokens: billCancelled ? "0" : null,
-										totalTokens: billCancelled
-											? (
-													cancelledCosts?.promptTokens ?? estimatedPromptTokens
-												)?.toString()
-											: null,
-										reasoningTokens: null,
-										cachedTokens: null,
-										hasError: false,
-										streamed: true,
-										canceled: true,
-										errorDetails: null,
-										inputCost: cancelledCosts?.inputCost ?? null,
-										outputCost: cancelledCosts?.outputCost ?? null,
-										cachedInputCost: cancelledCosts?.cachedInputCost ?? null,
-										requestCost: cancelledCosts?.requestCost ?? null,
-										webSearchCost: cancelledCosts?.webSearchCost ?? null,
-										imageInputTokens:
-											cancelledCosts?.imageInputTokens?.toString() ?? null,
-										imageOutputTokens:
-											cancelledCosts?.imageOutputTokens?.toString() ?? null,
-										imageInputCost: cancelledCosts?.imageInputCost ?? null,
-										imageOutputCost: cancelledCosts?.imageOutputCost ?? null,
-										cost: cancelledCosts?.totalCost ?? null,
-										estimatedCost: cancelledCosts?.estimatedCost ?? false,
-										discount: cancelledCosts?.discount ?? null,
-										dataStorageCost: billCancelled
-											? calculateDataStorageCost(
-													cancelledCosts?.promptTokens ?? estimatedPromptTokens,
-													null,
-													0,
-													null,
-													retentionLevel,
-												)
-											: "0",
-										cached: false,
-										toolResults: null,
-									},
+								const baseLogEntry = createLogEntry(
+									requestId,
+									project,
+									apiKey,
+									providerKey?.id,
+									usedModelFormatted,
+									usedModelMapping,
+									usedProvider,
+									initialRequestedModel,
+									requestedProvider,
+									messages,
+									temperature,
+									max_tokens,
+									top_p,
+									frequency_penalty,
+									presence_penalty,
+									reasoning_effort,
+									reasoning_max_tokens,
+									effort,
+									response_format,
+									tools,
+									tool_choice,
+									source,
+									customHeaders,
+									debugMode,
+									userAgent,
+									image_config,
+									routingMetadata,
+									rawBody,
+									null, // No response for canceled request
+									requestBody, // The request that was sent before cancellation
+									null, // No upstream response for canceled request
+									canceledPluginIds,
+									undefined, // No plugin results for canceled request
 								);
+
+								await insertLogEntry({
+									...baseLogEntry,
+									duration: Date.now() - perAttemptStartTime,
+									timeToFirstToken: null, // Not applicable for canceled request
+									timeToFirstReasoningToken: null, // Not applicable for canceled request
+									responseSize: 0,
+									content: null,
+									reasoningContent: null,
+									finishReason: "canceled",
+									promptTokens: billCancelled
+										? (
+												cancelledCosts?.promptTokens ?? estimatedPromptTokens
+											)?.toString()
+										: null,
+									completionTokens: billCancelled ? "0" : null,
+									totalTokens: billCancelled
+										? (
+												cancelledCosts?.promptTokens ?? estimatedPromptTokens
+											)?.toString()
+										: null,
+									reasoningTokens: null,
+									cachedTokens: null,
+									hasError: false,
+									streamed: true,
+									canceled: true,
+									errorDetails: null,
+									inputCost: cancelledCosts?.inputCost ?? null,
+									outputCost: cancelledCosts?.outputCost ?? null,
+									cachedInputCost: cancelledCosts?.cachedInputCost ?? null,
+									requestCost: cancelledCosts?.requestCost ?? null,
+									webSearchCost: cancelledCosts?.webSearchCost ?? null,
+									imageInputTokens:
+										cancelledCosts?.imageInputTokens?.toString() ?? null,
+									imageOutputTokens:
+										cancelledCosts?.imageOutputTokens?.toString() ?? null,
+									imageInputCost: cancelledCosts?.imageInputCost ?? null,
+									imageOutputCost: cancelledCosts?.imageOutputCost ?? null,
+									cost: cancelledCosts?.totalCost ?? null,
+									estimatedCost: cancelledCosts?.estimatedCost ?? false,
+									discount: cancelledCosts?.discount ?? null,
+									dataStorageCost: billCancelled
+										? calculateDataStorageCost(
+												cancelledCosts?.promptTokens ?? estimatedPromptTokens,
+												null,
+												0,
+												null,
+												retentionLevel,
+											)
+										: "0",
+									cached: false,
+									toolResults: null,
+								});
 
 								// Send a cancellation event to the client
 								await writeSSEAndCache({
@@ -4448,6 +4725,23 @@ chat.openapi(completions, async (c) => {
 									),
 								});
 
+								// Log the error in the database
+								// Extract plugin IDs for logging (fetch error)
+								const fetchErrorPluginIds = plugins?.map((p) => p.id) ?? [];
+
+								let sameProviderRetryContext: Awaited<
+									ReturnType<typeof resolveProviderContext>
+								> | null = null;
+								if (isRetryableErrorType("network_error")) {
+									rememberFailedKey(usedProvider, usedRegion, {
+										envVarName,
+										configIndex,
+										providerKeyId: providerKey?.id,
+									});
+									sameProviderRetryContext =
+										await tryResolveAlternateKeyForCurrentProvider(true);
+								}
+
 								// Check if we should retry before logging so we can mark the log as retried
 								const willRetryFetch = shouldRetryRequest({
 									requestedProvider,
@@ -4460,93 +4754,129 @@ chat.openapi(completions, async (c) => {
 										1,
 									usedProvider,
 								});
+								const willRetrySameProvider = sameProviderRetryContext !== null;
+								const willRetryRequest =
+									willRetrySameProvider || willRetryFetch;
 
-								enqueueChatLog(
-									c,
-									{
-										providerKeyId: providerKey?.id,
-										usedModel: usedModelFormatted,
-										usedModelMapping,
-										usedProvider,
-										requestedModel: initialRequestedModel,
-										requestedProvider,
-										messages,
-										temperature,
-										max_tokens,
-										top_p,
-										frequency_penalty,
-										presence_penalty,
-										reasoningEffort: reasoning_effort,
-										reasoningMaxTokens: reasoning_max_tokens,
-										effort,
-										responseFormat: response_format,
-										tools,
-										toolChoice: tool_choice,
-										source,
-										customHeaders,
-										debugMode,
-										userAgent,
-										imageConfig: image_config,
-										routingMetadata,
-										rawRequest: rawBody,
-										rawResponse: null,
-										upstreamRequest: requestBody,
-										upstreamResponse: null,
-										plugins: requestPluginIds,
-										pluginResults: undefined,
-									},
-									{
-										duration: Date.now() - perAttemptStartTime,
-										timeToFirstToken: null,
-										timeToFirstReasoningToken: null,
-										responseSize: 0,
-										content: null,
-										reasoningContent: null,
-										finishReason: "upstream_error",
-										promptTokens: null,
-										completionTokens: null,
-										totalTokens: null,
-										reasoningTokens: null,
-										cachedTokens: null,
-										hasError: true,
-										streamed: true,
-										canceled: false,
-										errorDetails: {
-											statusCode: 0,
-											statusText: error.name,
-											responseText: errorMessage,
-											cause: fetchCause,
-										},
-										cachedInputCost: null,
-										requestCost: null,
-										webSearchCost: null,
-										imageInputTokens: null,
-										imageOutputTokens: null,
-										imageInputCost: null,
-										imageOutputCost: null,
-										discount: null,
-										dataStorageCost: "0",
-										cached: false,
-										toolResults: null,
-										retried: willRetryFetch,
-										retriedByLogId: willRetryFetch ? finalLogId : null,
-									},
+								const baseLogEntry = createLogEntry(
+									requestId,
+									project,
+									apiKey,
+									providerKey?.id,
+									usedModelFormatted,
+									usedModelMapping,
+									usedProvider,
+									initialRequestedModel,
+									requestedProvider,
+									messages,
+									temperature,
+									max_tokens,
+									top_p,
+									frequency_penalty,
+									presence_penalty,
+									reasoning_effort,
+									reasoning_max_tokens,
+									effort,
+									response_format,
+									tools,
+									tool_choice,
+									source,
+									customHeaders,
+									debugMode,
+									userAgent,
+									image_config,
+									routingMetadata,
+									rawBody,
+									null, // No response for fetch error
+									requestBody, // The request that resulted in error
+									null, // No upstream response for fetch error
+									fetchErrorPluginIds,
+									undefined, // No plugin results for error case
 								);
+								const attemptLogId = shortid();
 
-								// Report key health for environment-based tokens
+								await insertLogEntry({
+									...baseLogEntry,
+									id: attemptLogId,
+									duration: Date.now() - perAttemptStartTime,
+									timeToFirstToken: null, // Not applicable for error case
+									timeToFirstReasoningToken: null, // Not applicable for error case
+									responseSize: 0,
+									content: null,
+									reasoningContent: null,
+									finishReason: "upstream_error",
+									promptTokens: null,
+									completionTokens: null,
+									totalTokens: null,
+									reasoningTokens: null,
+									cachedTokens: null,
+									hasError: true,
+									streamed: true,
+									canceled: false,
+									errorDetails: {
+										statusCode: 0,
+										statusText: error.name,
+										responseText: errorMessage,
+										cause: fetchCause,
+									},
+									cachedInputCost: null,
+									requestCost: null,
+									webSearchCost: null,
+									imageInputTokens: null,
+									imageOutputTokens: null,
+									imageInputCost: null,
+									imageOutputCost: null,
+									discount: null,
+									dataStorageCost: "0",
+									cached: false,
+									toolResults: null,
+									retried: willRetryRequest,
+									retriedByLogId: willRetryRequest ? finalLogId : null,
+								});
+
+								// Report key health for the selected token source
 								if (envVarName !== undefined) {
 									reportKeyError(envVarName, configIndex, 0);
 								}
+								if (providerKey?.id) {
+									reportTrackedKeyError(providerKey.id, 0);
+								}
+
+								if (willRetrySameProvider && sameProviderRetryContext) {
+									routingAttempts.push(
+										buildRoutingAttempt(
+											usedProvider,
+											baseModelName,
+											0,
+											getErrorType(0),
+											false,
+											{
+												region: usedRegion,
+												apiKeyHash: usedApiKeyHash,
+												logId: attemptLogId,
+											},
+										),
+									);
+									applyResolvedProviderContext(sameProviderRetryContext);
+									retryAttempt--;
+									continue;
+								}
 
 								if (willRetryFetch) {
-									routingAttempts.push({
-										provider: usedProvider,
-										model: baseModelName,
-										...(usedRegion && { region: usedRegion }),
-										status_code: 0,
-										error_type: getErrorType(0),
-										succeeded: false,
-									});
+									routingAttempts.push(
+										buildRoutingAttempt(
+											usedProvider,
+											baseModelName,
+											0,
+											getErrorType(0),
+											false,
+											{
+												region: usedRegion,
+												apiKeyHash: usedApiKeyHash,
+												logId: attemptLogId,
+											},
+										),
+									);
 									failedProviderIds.add(
 										providerRetryKey(usedProvider, usedRegion),
 									);
@@ -4611,6 +4941,23 @@ chat.openapi(completions, async (c) => {
 								});
 							}
 
+							// Log the request in the database
+							// Extract plugin IDs for logging
+							const streamingErrorPluginIds = plugins?.map((p) => p.id) ?? [];
+
+							let sameProviderRetryContext: Awaited<
+								ReturnType<typeof resolveProviderContext>
+							> | null = null;
+							if (isRetryableErrorType(finishReason)) {
+								rememberFailedKey(usedProvider, usedRegion, {
+									envVarName,
+									configIndex,
+									providerKeyId: providerKey?.id,
+								});
+								sameProviderRetryContext =
+									await tryResolveAlternateKeyForCurrentProvider(true);
+							}
+
 							// Check if we should retry before logging so we can mark the log as retried
 							const willRetryHttpError = shouldRetryRequest({
 								requestedProvider,
@@ -4623,94 +4970,101 @@ chat.openapi(completions, async (c) => {
 									1,
 								usedProvider,
 							});
+							const willRetrySameProvider = sameProviderRetryContext !== null;
+							const willRetryRequest =
+								willRetrySameProvider || willRetryHttpError;
 
-							enqueueChatLog(
-								c,
-								{
-									providerKeyId: providerKey?.id,
-									usedModel: usedModelFormatted,
-									usedModelMapping,
-									usedProvider,
-									requestedModel: initialRequestedModel,
-									requestedProvider,
-									messages,
-									temperature,
-									max_tokens,
-									top_p,
-									frequency_penalty,
-									presence_penalty,
-									reasoningEffort: reasoning_effort,
-									reasoningMaxTokens: reasoning_max_tokens,
-									effort,
-									responseFormat: response_format,
-									tools,
-									toolChoice: tool_choice,
-									source,
-									customHeaders,
-									debugMode,
-									userAgent,
-									imageConfig: image_config,
-									routingMetadata,
-									rawRequest: rawBody,
-									rawResponse: null,
-									upstreamRequest: requestBody,
-									upstreamResponse: null,
-									plugins: requestPluginIds,
-									pluginResults: undefined,
-								},
-								{
-									duration: Date.now() - perAttemptStartTime,
-									timeToFirstToken: null,
-									timeToFirstReasoningToken: null,
-									responseSize: errorResponseText.length,
-									content: null,
-									reasoningContent: null,
-									finishReason,
-									promptTokens:
-										finishReason === "content_filter"
-											? (
-													estimateTokens(usedProvider, messages, null, null, 0)
-														.calculatedPromptTokens ?? null
-												)?.toString()
-											: null,
-									completionTokens: null,
-									totalTokens:
-										finishReason === "content_filter"
-											? (
-													estimateTokens(usedProvider, messages, null, null, 0)
-														.calculatedPromptTokens ?? null
-												)?.toString()
-											: null,
-									reasoningTokens: null,
-									cachedTokens: null,
-									hasError: finishReason !== "content_filter",
-									streamed: true,
-									canceled: false,
-									errorDetails:
-										finishReason === "content_filter"
-											? null
-											: {
-													statusCode: res.status,
-													statusText: res.statusText,
-													responseText: errorResponseText,
-												},
-									cachedInputCost: null,
-									requestCost: null,
-									webSearchCost: null,
-									imageInputTokens: null,
-									imageOutputTokens: null,
-									imageInputCost: null,
-									imageOutputCost: null,
-									discount: null,
-									dataStorageCost: "0",
-									cached: false,
-									toolResults: null,
-									retried: willRetryHttpError,
-									retriedByLogId: willRetryHttpError ? finalLogId : null,
-								},
+							const baseLogEntry = createLogEntry(
+								requestId,
+								project,
+								apiKey,
+								providerKey?.id,
+								usedModelFormatted,
+								usedModelMapping,
+								usedProvider,
+								initialRequestedModel,
+								requestedProvider,
+								messages,
+								temperature,
+								max_tokens,
+								top_p,
+								frequency_penalty,
+								presence_penalty,
+								reasoning_effort,
+								reasoning_max_tokens,
+								effort,
+								response_format,
+								tools,
+								tool_choice,
+								source,
+								customHeaders,
+								debugMode,
+								userAgent,
+								image_config,
+								routingMetadata,
+								rawBody,
+								null, // No response for error case
+								requestBody, // The request that was sent and resulted in error
+								null, // No upstream response for error case
+								streamingErrorPluginIds,
+								undefined, // No plugin results for error case
 							);
+							const attemptLogId = shortid();
 
-							// Report key health for environment-based tokens
+							await insertLogEntry({
+								...baseLogEntry,
+								id: attemptLogId,
+								duration: Date.now() - perAttemptStartTime,
+								timeToFirstToken: null,
+								timeToFirstReasoningToken: null,
+								responseSize: errorResponseText.length,
+								content: null,
+								reasoningContent: null,
+								finishReason,
+								promptTokens:
+									finishReason === "content_filter"
+										? (
+												estimateTokens(usedProvider, messages, null, null, 0)
+													.calculatedPromptTokens ?? null
+											)?.toString()
+										: null,
+								completionTokens: null,
+								totalTokens:
+									finishReason === "content_filter"
+										? (
+												estimateTokens(usedProvider, messages, null, null, 0)
+													.calculatedPromptTokens ?? null
+											)?.toString()
+										: null,
+								reasoningTokens: null,
+								cachedTokens: null,
+								hasError: finishReason !== "content_filter", // content_filter is not an error
+								streamed: true,
+								canceled: false,
+								errorDetails:
+									finishReason === "content_filter"
+										? null
+										: {
+												statusCode: res.status,
+												statusText: res.statusText,
+												responseText: errorResponseText,
+											},
+								cachedInputCost: null,
+								requestCost: null,
+								webSearchCost: null,
+								imageInputTokens: null,
+								imageOutputTokens: null,
+								imageInputCost: null,
+								imageOutputCost: null,
+								discount: null,
+								dataStorageCost: "0",
+								cached: false,
+								toolResults: null,
+								retried: willRetryRequest,
+								retriedByLogId: willRetryRequest ? finalLogId : null,
+							});
+
+							// Report key health for the selected token source
 							// Don't report content_filter as a key error - it's intentional provider behavior
 							if (
 								envVarName !== undefined &&
@@ -4723,16 +5077,49 @@ chat.openapi(completions, async (c) => {
 									errorResponseText,
 								);
 							}
+							if (providerKey?.id && finishReason !== "content_filter") {
+								reportTrackedKeyError(
+									providerKey.id,
+									res.status,
+									errorResponseText,
+								);
+							}
+
+							if (willRetrySameProvider && sameProviderRetryContext) {
+								routingAttempts.push(
+									buildRoutingAttempt(
+										usedProvider,
+										baseModelName,
+										res.status,
+										getErrorType(res.status),
+										false,
+										{
+											region: usedRegion,
+											apiKeyHash: usedApiKeyHash,
+											logId: attemptLogId,
+										},
+									),
+								);
+								applyResolvedProviderContext(sameProviderRetryContext);
+								retryAttempt--;
+								continue;
+							}
 
 							if (willRetryHttpError) {
-								routingAttempts.push({
-									provider: usedProvider,
-									model: baseModelName,
-									...(usedRegion && { region: usedRegion }),
-									status_code: res.status,
-									error_type: getErrorType(res.status),
-									succeeded: false,
-								});
+								routingAttempts.push(
+									buildRoutingAttempt(
+										usedProvider,
+										baseModelName,
+										res.status,
+										getErrorType(res.status),
+										false,
+										{
+											region: usedRegion,
+											apiKeyHash: usedApiKeyHash,
+											logId: attemptLogId,
+										},
+									),
+								);
 								failedProviderIds.add(
 									providerRetryKey(usedProvider, usedRegion),
 								);
@@ -4801,19 +5188,241 @@ chat.openapi(completions, async (c) => {
 							return;
 						}
 
+						const inspectedStreamingResponse =
+							await inspectImmediateStreamingProviderError(res, usedProvider);
+						res = inspectedStreamingResponse.response;
+						if (inspectedStreamingResponse.immediateError) {
+							const {
+								errorCode,
+								errorMessage,
+								errorResponseText,
+								errorType,
+								inferredStatusCode,
+								statusText,
+							} = inspectedStreamingResponse.immediateError;
+
+							logger.warn("Immediate streaming provider error", {
+								status: inferredStatusCode,
+								errorText: errorResponseText,
+								usedProvider,
+								requestedProvider,
+								usedModel,
+								initialRequestedModel,
+								organizationId: project.organizationId,
+								projectId: apiKey.projectId,
+								apiKeyId: apiKey.id,
+								unifiedFinishReason: getUnifiedFinishReason(
+									errorType,
+									usedProvider,
+								),
+							});
+
+							const streamingErrorPluginIds = plugins?.map((p) => p.id) ?? [];
+
+							let sameProviderRetryContext: Awaited<
+								ReturnType<typeof resolveProviderContext>
+							> | null = null;
+							if (isRetryableErrorType(errorType)) {
+								rememberFailedKey(usedProvider, usedRegion, {
+									envVarName,
+									configIndex,
+									providerKeyId: providerKey?.id,
+								});
+								sameProviderRetryContext =
+									await tryResolveAlternateKeyForCurrentProvider(true);
+							}
+
+							const willRetryStreamingError = shouldRetryRequest({
+								requestedProvider,
+								noFallback,
+								errorType,
+								retryCount: retryAttempt,
+								remainingProviders:
+									(routingMetadata?.providerScores.length ?? 0) -
+									failedProviderIds.size -
+									1,
+								usedProvider,
+							});
+							const willRetrySameProvider = sameProviderRetryContext !== null;
+							const willRetryRequest =
+								willRetrySameProvider || willRetryStreamingError;
+
+							const baseLogEntry = createLogEntry(
+								requestId,
+								project,
+								apiKey,
+								providerKey?.id,
+								usedModelFormatted,
+								usedModelMapping,
+								usedProvider,
+								initialRequestedModel,
+								requestedProvider,
+								messages,
+								temperature,
+								max_tokens,
+								top_p,
+								frequency_penalty,
+								presence_penalty,
+								reasoning_effort,
+								reasoning_max_tokens,
+								effort,
+								response_format,
+								tools,
+								tool_choice,
+								source,
+								customHeaders,
+								debugMode,
+								userAgent,
+								image_config,
+								routingMetadata,
+								rawBody,
+								null,
+								requestBody,
+								null,
+								streamingErrorPluginIds,
+								undefined,
+							);
+							const attemptLogId = shortid();
+
+							await insertLogEntry({
+								...baseLogEntry,
+								id: attemptLogId,
+								duration: Date.now() - perAttemptStartTime,
+								timeToFirstToken: null,
+								timeToFirstReasoningToken: null,
+								responseSize: errorResponseText.length,
+								content: null,
+								reasoningContent: null,
+								finishReason: errorType,
+								promptTokens: null,
+								completionTokens: null,
+								totalTokens: null,
+								reasoningTokens: null,
+								cachedTokens: null,
+								hasError: errorType !== "content_filter",
+								streamed: true,
+								canceled: false,
+								errorDetails:
+									errorType === "content_filter"
+										? null
+										: {
+												statusCode: inferredStatusCode,
+												statusText,
+												responseText: errorResponseText,
+											},
+								cachedInputCost: null,
+								requestCost: null,
+								webSearchCost: null,
+								imageInputTokens: null,
+								imageOutputTokens: null,
+								imageInputCost: null,
+								imageOutputCost: null,
+								discount: null,
+								dataStorageCost: "0",
+								cached: false,
+								toolResults: null,
+								retried: willRetryRequest,
+								retriedByLogId: willRetryRequest ? finalLogId : null,
+							});
+
+							if (envVarName !== undefined && errorType !== "content_filter") {
+								reportKeyError(
+									envVarName,
+									configIndex,
+									inferredStatusCode,
+									errorResponseText,
+								);
+							}
+							if (providerKey?.id && errorType !== "content_filter") {
+								reportTrackedKeyError(
+									providerKey.id,
+									inferredStatusCode,
+									errorResponseText,
+								);
+							}
+
+							if (willRetrySameProvider && sameProviderRetryContext) {
+								routingAttempts.push(
+									buildRoutingAttempt(
+										usedProvider,
+										baseModelName,
+										inferredStatusCode,
+										getErrorType(inferredStatusCode),
+										false,
+										{
+											region: usedRegion,
+											apiKeyHash: usedApiKeyHash,
+											logId: attemptLogId,
+										},
+									),
+								);
+								applyResolvedProviderContext(sameProviderRetryContext);
+								retryAttempt--;
+								continue;
+							}
+
+							if (willRetryStreamingError) {
+								routingAttempts.push(
+									buildRoutingAttempt(
+										usedProvider,
+										baseModelName,
+										inferredStatusCode,
+										getErrorType(inferredStatusCode),
+										false,
+										{
+											region: usedRegion,
+											apiKeyHash: usedApiKeyHash,
+											logId: attemptLogId,
+										},
+									),
+								);
+								failedProviderIds.add(
+									providerRetryKey(usedProvider, usedRegion),
+								);
+								continue;
+							}
+
+							await writeSSEAndCache({
+								event: "error",
+								data: JSON.stringify({
+									error: {
+										message: errorMessage,
+										type: errorType,
+										code: errorCode,
+										param: null,
+										responseText: errorResponseText,
+									},
+								}),
+								id: String(eventId++),
+							});
+							await writeSSEAndCache({
+								event: "done",
+								data: "[DONE]",
+								id: String(eventId++),
+							});
+							clearKeepalive();
+							return;
+						}
+
 						break; // Fetch succeeded, exit retry loop
 					} // End of retry for loop
 
 					// Add the final attempt (successful or last failed) to routing
 					if (res && res.ok && usedProvider) {
-						routingAttempts.push({
-							provider: usedProvider,
-							model: baseModelName,
-							...(usedRegion && { region: usedRegion }),
-							status_code: res.status,
-							error_type: "none",
-							succeeded: true,
-						});
+						routingAttempts.push(
+							buildRoutingAttempt(
+								usedProvider,
+								baseModelName,
+								res.status,
+								"none",
+								true,
+								{
+									region: usedRegion,
+									apiKeyHash: usedApiKeyHash,
+									logId: finalLogId,
+								},
+							),
+						);
 					}
 
 					// Update routingMetadata with all routing attempts for DB logging
@@ -4906,6 +5515,7 @@ chat.openapi(completions, async (c) => {
 					let totalTokens = null;
 					let reasoningTokens = null;
 					let cachedTokens = null;
+					let cacheCreationTokens: number | null = null;
 					let streamingToolCalls = null;
 					let imageByteSize = 0; // Track total image data size for token estimation
 					let outputImageCount = 0; // Track number of output images for cost calculation
@@ -4915,6 +5525,7 @@ chat.openapi(completions, async (c) => {
 					let sawProviderTerminalEvent = false;
 					let sawOpenAiResponsesDoneEvent = false;
 					let sawOpenAiResponsesCompletedStatus = false;
+					let sentDownstreamFinishReasonChunk = false;
 					let handledTerminalProviderEvent = false;
 					let buffer = ""; // Buffer for accumulating partial data across chunks (string for SSE)
 					let binaryBuffer = new Uint8Array(0); // Buffer for binary event streams (AWS Bedrock)
@@ -5328,10 +5939,70 @@ chat.openapi(completions, async (c) => {
 											webSearchCount,
 											project.organizationId,
 										);
+										streamingCosts.dataStorageCost = toDataStorageCostNumber(
+											streamingCosts.promptTokens ?? finalPromptTokens,
+											cachedTokens,
+											streamingCosts.completionTokens ?? finalCompletionTokens,
+											reasoningTokens,
+											retentionLevel,
+										);
 
 										// Include costs in response for all users
 										const shouldIncludeCosts = true;
 
+										const finalStreamUsage: Record<string, any> = {
+											prompt_tokens: Math.max(
+												1,
+												streamingCosts.promptTokens ?? finalPromptTokens ?? 1,
+											),
+											completion_tokens:
+												streamingCosts.completionTokens ??
+												finalCompletionTokens ??
+												0,
+											total_tokens: Math.max(
+												1,
+												(streamingCosts.promptTokens ??
+													finalPromptTokens ??
+													0) +
+													(streamingCosts.completionTokens ??
+														finalCompletionTokens ??
+														0) +
+													(reasoningTokens ?? 0),
+											),
+											...(reasoningTokens !== null &&
+												reasoningTokens > 0 && {
+													reasoning_tokens: reasoningTokens,
+												}),
+											...((cachedTokens !== null ||
+												(cacheCreationTokens !== null &&
+													cacheCreationTokens > 0)) && {
+												prompt_tokens_details: {
+													cached_tokens: cachedTokens ?? 0,
+													...(cacheCreationTokens !== null &&
+														cacheCreationTokens > 0 && {
+															cache_creation_tokens: cacheCreationTokens,
+														}),
+												},
+											}),
+										};
+										applyExtendedUsageFields(finalStreamUsage, {
+											costs: shouldIncludeCosts
+												? {
+														inputCost: streamingCosts.inputCost,
+														outputCost: streamingCosts.outputCost,
+														cachedInputCost: streamingCosts.cachedInputCost,
+														requestCost: streamingCosts.requestCost,
+														webSearchCost: streamingCosts.webSearchCost,
+														imageInputCost: streamingCosts.imageInputCost,
+														imageOutputCost: streamingCosts.imageOutputCost,
+														totalCost: streamingCosts.totalCost,
+														dataStorageCost: streamingCosts.dataStorageCost,
+													}
+												: null,
+											cachedTokens,
+											cacheCreationTokens,
+											reasoningTokens,
+										});
 										const finalUsageChunk = {
 											id: `chatcmpl-${Date.now()}`,
 											object: "chat.completion.chunk",
@@ -5344,35 +6015,7 @@ chat.openapi(completions, async (c) => {
 													finish_reason: null,
 												},
 											],
-											usage: {
-												prompt_tokens: Math.max(
-													1,
-													streamingCosts.promptTokens ?? finalPromptTokens ?? 1,
-												),
-												completion_tokens:
-													streamingCosts.completionTokens ??
-													finalCompletionTokens ??
-													0,
-												total_tokens: Math.max(
-													1,
-													(streamingCosts.promptTokens ??
-														finalPromptTokens ??
-														0) +
-														(streamingCosts.completionTokens ??
-															finalCompletionTokens ??
-															0) +
-														(reasoningTokens ?? 0),
-												),
-												...(shouldIncludeCosts && {
-													cost_usd_total: streamingCosts.totalCost,
-													cost_usd_input: streamingCosts.inputCost,
-													cost_usd_output: streamingCosts.outputCost,
-													cost_usd_cached_input: streamingCosts.cachedInputCost,
-													cost_usd_request: streamingCosts.requestCost,
-													cost_usd_image_input: streamingCosts.imageInputCost,
-													cost_usd_image_output: streamingCosts.imageOutputCost,
-												}),
-											},
+											usage: finalStreamUsage,
 										};
 
 										await writeSSEAndCache({
@@ -5468,6 +6111,28 @@ chat.openapi(completions, async (c) => {
 										usedProvider === "aws-bedrock"
 											? extractAwsBedrockStreamError(data)
 											: null;
+									if (
+										data &&
+										typeof data === "object" &&
+										"response" in data &&
+										data.response &&
+										typeof data.response === "object" &&
+										"status" in data.response &&
+										data.response.status === "completed"
+									) {
+										sawOpenAiResponsesCompletedStatus = true;
+									}
+									if (
+										data &&
+										typeof data === "object" &&
+										"type" in data &&
+										typeof data.type === "string" &&
+										(data.type === "response.content_part.done" ||
+											data.type === "response.output_item.done" ||
+											data.type === "response.output_text.done")
+									) {
+										sawOpenAiResponsesDoneEvent = true;
+									}
 									const openAiCompatibleStreamError =
 										!awsBedrockStreamError &&
 										data &&
@@ -5492,13 +6157,10 @@ chat.openapi(completions, async (c) => {
 												),
 											);
 										}
-										const inferredStatusCode =
-											typeof openAiCompatibleStreamError.status_code ===
-											"number"
-												? openAiCompatibleStreamError.status_code
-												: typeof openAiCompatibleStreamError.status === "number"
-													? openAiCompatibleStreamError.status
-													: 400;
+										const inferredStatusCode = inferStreamingErrorStatusCode(
+											openAiCompatibleStreamError,
+											errorResponseText,
+										);
 										const errorType = getFinishReasonFromError(
 											inferredStatusCode,
 											errorResponseText,
@@ -5638,29 +6300,6 @@ chat.openapi(completions, async (c) => {
 										processedLength = eventEnd;
 										searchStart = eventEnd;
 										continue;
-									}
-
-									if (
-										data &&
-										typeof data === "object" &&
-										"response" in data &&
-										data.response &&
-										typeof data.response === "object" &&
-										"status" in data.response &&
-										data.response.status === "completed"
-									) {
-										sawOpenAiResponsesCompletedStatus = true;
-									}
-									if (
-										data &&
-										typeof data === "object" &&
-										"type" in data &&
-										typeof data.type === "string" &&
-										(data.type === "response.content_part.done" ||
-											data.type === "response.output_item.done" ||
-											data.type === "response.output_text.done")
-									) {
-										sawOpenAiResponsesDoneEvent = true;
 									}
 
 									if (splitTaggedReasoning) {
@@ -5886,6 +6525,8 @@ chat.openapi(completions, async (c) => {
 									// Extract finishReason from transformedData to update tracking variable
 									if (transformedData.choices?.[0]?.finish_reason) {
 										finishReason = transformedData.choices[0].finish_reason;
+										sawProviderTerminalEvent = true;
+										sentDownstreamFinishReasonChunk = true;
 									}
 
 									// Extract content for logging using helper function
@@ -6056,12 +6697,8 @@ chat.openapi(completions, async (c) => {
 											}
 											break;
 										default: // OpenAI format
-											if (
-												transformedData?.choices &&
-												transformedData.choices[0]?.finish_reason
-											) {
-												finishReason = transformedData.choices[0].finish_reason;
-												sawProviderTerminalEvent = true;
+											if (data.choices && data.choices[0]?.finish_reason) {
+												finishReason = data.choices[0].finish_reason;
 											}
 											break;
 									}
@@ -6087,6 +6724,9 @@ chat.openapi(completions, async (c) => {
 									}
 									if (usage.cachedTokens !== null) {
 										cachedTokens = usage.cachedTokens;
+									}
+									if (usage.cacheCreationTokens !== null) {
+										cacheCreationTokens = usage.cacheCreationTokens;
 									}
 
 									// Estimate tokens if not provided and we have a finish reason
@@ -6353,10 +6993,18 @@ chat.openapi(completions, async (c) => {
 							sawUpstreamDoneSentinel ||
 							sawProviderTerminalEvent ||
 							handledTerminalProviderEvent;
+						// A terminal finish reason (stop, tool_calls, length) also counts
+						// as a valid stream completion — some providers (e.g. MiniMax)
+						// send finish_reason but omit the [DONE] sentinel.
+						const hasTerminalFinishReason =
+							finishReason !== null &&
+							finishReason !== "upstream_error" &&
+							finishReason !== "gateway_error";
 						const streamEndedWithoutTerminalEvent =
 							!streamingError &&
 							!canceled &&
-							(!streamHasVerifiedTerminalEvent || finishReason === null);
+							!streamHasVerifiedTerminalEvent &&
+							!hasTerminalFinishReason;
 						if (streamEndedWithoutTerminalEvent) {
 							const hasBufferedNonWhitespace = /\S/u.test(buffer);
 							const responseText = hasBufferedNonWhitespace
@@ -6427,23 +7075,14 @@ chat.openapi(completions, async (c) => {
 						// Check if the response finished successfully but has no content, tokens, or tool calls
 						// This indicates an empty response which should be marked as an error
 						// Do this check BEFORE sending usage chunks to ensure proper event ordering
-						// Exclude content_filter responses as they are intentionally empty (blocked by provider)
-						// For Google, check for original finish reasons that indicate content filtering
-						// These include both finishReason values and promptFeedback.blockReason values
-						const isGoogleContentFilterStreaming =
-							isGoogleCompatibleProvider(usedProvider) &&
-							(finishReason === "SAFETY" ||
-								finishReason === "PROHIBITED_CONTENT" ||
-								finishReason === "RECITATION" ||
-								finishReason === "BLOCKLIST" ||
-								finishReason === "SPII" ||
-								finishReason === "OTHER");
+						// Exclude content filter responses as they are intentionally empty.
+						const isContentFilterStreamingResponse =
+							isContentFilterFinishReason(finishReason, usedProvider);
 						const hasEmptyResponse =
 							!streamingError &&
 							finishReason &&
-							finishReason !== "content_filter" &&
 							finishReason !== "incomplete" &&
-							!isGoogleContentFilterStreaming &&
+							!isContentFilterStreamingResponse &&
 							(!calculatedCompletionTokens ||
 								calculatedCompletionTokens === 0) &&
 							(!calculatedReasoningTokens || calculatedReasoningTokens === 0) &&
@@ -6508,6 +7147,43 @@ chat.openapi(completions, async (c) => {
 								);
 							}
 						} else if (!streamingError && !doneSent) {
+							if (
+								finishReason &&
+								!sentDownstreamFinishReasonChunk &&
+								!shouldBufferForHealing
+							) {
+								try {
+									const finishChunk = {
+										id: `chatcmpl-${Date.now()}`,
+										object: "chat.completion.chunk",
+										created: Math.floor(Date.now() / 1000),
+										model: usedModel,
+										choices: [
+											{
+												index: 0,
+												delta: {},
+												finish_reason: mapFinishReasonToOpenai(
+													finishReason,
+													usedProvider,
+													!!streamingToolCalls && streamingToolCalls.length > 0,
+												),
+											},
+										],
+									};
+
+									await writeSSEAndCache({
+										data: JSON.stringify(finishChunk),
+										id: String(eventId++),
+									});
+									sentDownstreamFinishReasonChunk = true;
+								} catch (error) {
+									logger.error(
+										"Error sending synthesized finish chunk",
+										error instanceof Error ? error : new Error(String(error)),
+									);
+								}
+							}
+
 							// Calculate costs before sending usage chunk so we can include cost data
 							const billCancelledRequestsEarly = shouldBillCancelledRequests();
 							streamingCostsEarly =
@@ -6523,13 +7199,13 @@ chat.openapi(completions, async (c) => {
 											imageInputCost: null,
 											imageOutputCost: null,
 											totalCost: null,
-											dataStorageCost: null as number | null,
 											promptTokens: null,
 											completionTokens: null,
 											cachedTokens: null,
 											estimatedCost: false,
 											discount: undefined,
 											pricingTier: undefined,
+											dataStorageCost: null as number | null,
 										}
 									: await calculateCosts(
 											usedModel,
@@ -6551,6 +7227,16 @@ chat.openapi(completions, async (c) => {
 											webSearchCount,
 											project.organizationId,
 										);
+							if (streamingCostsEarly.totalCost !== null) {
+								streamingCostsEarly.dataStorageCost = toDataStorageCostNumber(
+									streamingCostsEarly.promptTokens ?? calculatedPromptTokens,
+									cachedTokens,
+									streamingCostsEarly.completionTokens ??
+										calculatedCompletionTokens,
+									reasoningTokens,
+									retentionLevel,
+								);
+							}
 
 							// Always send final usage chunk with cost data for SDK compatibility
 							try {
@@ -6585,28 +7271,46 @@ chat.openapi(completions, async (c) => {
 										const adjCompletion = Math.round(
 											completionTokens ?? calculatedCompletionTokens ?? 0,
 										);
-										return {
+										const earlyUsage: Record<string, any> = {
 											prompt_tokens: adjPrompt,
 											completion_tokens: adjCompletion,
 											total_tokens: Math.max(
 												1,
 												Math.round(adjPrompt + adjCompletion),
 											),
-											...(cachedTokens !== null && {
+											...(reasoningTokens !== null &&
+												reasoningTokens > 0 && {
+													reasoning_tokens: reasoningTokens,
+												}),
+											...((cachedTokens !== null ||
+												(cacheCreationTokens !== null &&
+													cacheCreationTokens > 0)) && {
 												prompt_tokens_details: {
-													cached_tokens: cachedTokens,
+													cached_tokens: cachedTokens ?? 0,
+													...(cacheCreationTokens !== null &&
+														cacheCreationTokens > 0 && {
+															cache_creation_tokens: cacheCreationTokens,
+														}),
 												},
 											}),
-											cost_usd_total: streamingCostsEarly.totalCost,
-											cost_usd_input: streamingCostsEarly.inputCost,
-											cost_usd_output: streamingCostsEarly.outputCost,
-											cost_usd_cached_input:
-												streamingCostsEarly.cachedInputCost,
-											cost_usd_request: streamingCostsEarly.requestCost,
-											cost_usd_image_input: streamingCostsEarly.imageInputCost,
-											cost_usd_image_output:
-												streamingCostsEarly.imageOutputCost,
 										};
+										applyExtendedUsageFields(earlyUsage, {
+											costs: {
+												inputCost: streamingCostsEarly.inputCost,
+												outputCost: streamingCostsEarly.outputCost,
+												cachedInputCost: streamingCostsEarly.cachedInputCost,
+												requestCost: streamingCostsEarly.requestCost,
+												webSearchCost: streamingCostsEarly.webSearchCost,
+												imageInputCost: streamingCostsEarly.imageInputCost,
+												imageOutputCost: streamingCostsEarly.imageOutputCost,
+												totalCost: streamingCostsEarly.totalCost,
+												dataStorageCost: streamingCostsEarly.dataStorageCost,
+											},
+											cachedTokens,
+											cacheCreationTokens,
+											reasoningTokens,
+										});
+										return earlyUsage;
 									})(),
 								};
 
@@ -6680,7 +7384,11 @@ chat.openapi(completions, async (c) => {
 											{
 												index: 0,
 												delta: {},
-												finish_reason: finishReason ?? "stop",
+												finish_reason: mapFinishReasonToOpenai(
+													finishReason,
+													usedProvider,
+													!!streamingToolCalls && streamingToolCalls.length > 0,
+												),
 											},
 										],
 									};
@@ -6786,6 +7494,7 @@ chat.openapi(completions, async (c) => {
 										estimatedCost: false,
 										discount: undefined,
 										pricingTier: undefined,
+										dataStorageCost: null as number | null,
 									}
 								: await calculateCosts(
 										usedModel,
@@ -6823,11 +7532,50 @@ chat.openapi(completions, async (c) => {
 							}
 						}
 
+						// Extract plugin IDs for logging
+						const streamingPluginIds = plugins?.map((p) => p.id) ?? [];
+
 						// Determine plugin results for logging (includes healing results if applicable)
 						const finalPluginResults =
 							Object.keys(streamingPluginResults).length > 0
 								? streamingPluginResults
 								: undefined;
+
+						const baseLogEntry = createLogEntry(
+							requestId,
+							project,
+							apiKey,
+							providerKey?.id,
+							usedModelFormatted,
+							usedModelMapping,
+							usedProvider,
+							initialRequestedModel,
+							requestedProvider,
+							messages,
+							temperature,
+							max_tokens,
+							top_p,
+							frequency_penalty,
+							presence_penalty,
+							reasoning_effort,
+							reasoning_max_tokens,
+							effort,
+							response_format,
+							tools,
+							tool_choice,
+							source,
+							customHeaders,
+							debugMode,
+							userAgent,
+							image_config,
+							routingMetadata,
+							rawBody,
+							streamingError ?? streamingRawResponseData, // Raw SSE data sent back to the client
+							requestBody, // The request sent to the provider
+							streamingError ?? rawUpstreamData, // Raw streaming data received from upstream provider
+							streamingPluginIds,
+							finalPluginResults, // Plugin results including healing (if enabled)
+						);
 
 						// Enhanced logging for Google models streaming to debug missing responses
 						if (isGoogleCompatibleProvider(usedProvider)) {
@@ -6852,140 +7600,121 @@ chat.openapi(completions, async (c) => {
 						const shouldIncludeTokensForBilling =
 							!canceled || (canceled && billCancelledRequests);
 
-						enqueueChatLog(
-							c,
-							{
-								providerKeyId: providerKey?.id,
-								usedModel: usedModelFormatted,
-								usedModelMapping,
-								usedProvider,
-								requestedModel: initialRequestedModel,
-								requestedProvider,
-								messages,
-								temperature,
-								max_tokens,
-								top_p,
-								frequency_penalty,
-								presence_penalty,
-								reasoningEffort: reasoning_effort,
-								reasoningMaxTokens: reasoning_max_tokens,
-								effort,
-								responseFormat: response_format,
-								tools,
-								toolChoice: tool_choice,
-								source,
-								customHeaders,
-								debugMode,
-								userAgent,
-								imageConfig: image_config,
-								routingMetadata,
-								rawRequest: rawBody,
-								rawResponse: streamingError ?? streamingRawResponseData,
-								upstreamRequest: requestBody,
-								upstreamResponse: streamingError ?? rawUpstreamData,
-								plugins: requestPluginIds,
-								pluginResults: finalPluginResults,
-							},
-							{
-								id: routingAttempts.length > 0 ? finalLogId : undefined,
-								duration,
-								timeToFirstToken,
-								timeToFirstReasoningToken,
-								responseSize: fullContent.length,
-								content: fullContent,
-								reasoningContent: fullReasoningContent || null,
-								finishReason: canceled ? "canceled" : finishReason,
-								promptTokens: shouldIncludeTokensForBilling
-									? (calculatedPromptTokens?.toString() ?? null)
-									: null,
-								completionTokens: shouldIncludeTokensForBilling
-									? (calculatedCompletionTokens?.toString() ?? null)
-									: null,
-								totalTokens: shouldIncludeTokensForBilling
-									? (calculatedTotalTokens?.toString() ?? null)
-									: null,
-								reasoningTokens: shouldIncludeTokensForBilling
-									? (calculatedReasoningTokens?.toString() ?? null)
-									: null,
-								cachedTokens: shouldIncludeTokensForBilling
-									? (cachedTokens?.toString() ?? null)
-									: null,
-								hasError: streamingError !== null,
-								errorDetails: streamingError
-									? {
-											statusCode:
-												typeof streamingError === "object" &&
-												streamingError !== null &&
-												"details" in streamingError &&
-												typeof streamingError.details === "object" &&
-												streamingError.details !== null &&
-												"statusCode" in streamingError.details &&
-												typeof streamingError.details.statusCode === "number"
-													? streamingError.details.statusCode
-													: 500,
-											statusText:
-												typeof streamingError === "object" &&
-												streamingError !== null &&
-												"details" in streamingError &&
-												typeof streamingError.details === "object" &&
-												streamingError.details !== null &&
-												"statusText" in streamingError.details &&
-												typeof streamingError.details.statusText === "string"
-													? streamingError.details.statusText
-													: "Streaming Error",
-											responseText:
-												typeof streamingError === "object" &&
-												streamingError !== null &&
-												"details" in streamingError &&
-												typeof streamingError.details === "object" &&
-												streamingError.details !== null &&
-												"responseText" in streamingError.details &&
-												typeof streamingError.details.responseText === "string"
-													? streamingError.details.responseText
-													: typeof streamingError === "object" &&
-														  streamingError !== null &&
-														  "details" in streamingError
-														? JSON.stringify(streamingError)
-														: streamingError instanceof Error
-															? streamingError.message
-															: String(streamingError),
-										}
-									: null,
-								streamed: true,
-								canceled: canceled,
-								inputCost: costs.inputCost,
-								outputCost: costs.outputCost,
-								cachedInputCost: costs.cachedInputCost,
-								requestCost: costs.requestCost,
-								webSearchCost: costs.webSearchCost,
-								imageInputTokens: costs.imageInputTokens?.toString() ?? null,
-								imageOutputTokens: costs.imageOutputTokens?.toString() ?? null,
-								imageInputCost: costs.imageInputCost ?? null,
-								imageOutputCost: costs.imageOutputCost ?? null,
-								cost: costs.totalCost,
-								estimatedCost: costs.estimatedCost,
-								discount: costs.discount,
-								pricingTier: costs.pricingTier,
-								dataStorageCost: shouldIncludeTokensForBilling
-									? calculateDataStorageCost(
-											calculatedPromptTokens,
-											cachedTokens,
-											calculatedCompletionTokens,
-											calculatedReasoningTokens,
-											retentionLevel,
-										)
-									: "0",
-								cached: false,
-								toolResults: streamingToolCalls,
-							},
-						);
+						const streamingErrorStatusCode =
+							typeof streamingError === "object" &&
+							streamingError !== null &&
+							"details" in streamingError &&
+							typeof streamingError.details === "object" &&
+							streamingError.details !== null &&
+							"statusCode" in streamingError.details &&
+							typeof streamingError.details.statusCode === "number"
+								? streamingError.details.statusCode
+								: 500;
 
-						// Report key health for environment-based tokens
+						await insertLogEntry({
+							...baseLogEntry,
+							id: routingAttempts.length > 0 ? finalLogId : undefined,
+							duration,
+							timeToFirstToken,
+							timeToFirstReasoningToken,
+							responseSize: fullContent.length,
+							content: fullContent,
+							reasoningContent: fullReasoningContent || null,
+							finishReason: canceled ? "canceled" : finishReason,
+							promptTokens: shouldIncludeTokensForBilling
+								? (calculatedPromptTokens?.toString() ?? null)
+								: null,
+							completionTokens: shouldIncludeTokensForBilling
+								? (calculatedCompletionTokens?.toString() ?? null)
+								: null,
+							totalTokens: shouldIncludeTokensForBilling
+								? (calculatedTotalTokens?.toString() ?? null)
+								: null,
+							reasoningTokens: shouldIncludeTokensForBilling
+								? (calculatedReasoningTokens?.toString() ?? null)
+								: null,
+							cachedTokens: shouldIncludeTokensForBilling
+								? (cachedTokens?.toString() ?? null)
+								: null,
+							hasError: streamingError !== null,
+							errorDetails: streamingError
+								? {
+										statusCode: streamingErrorStatusCode,
+										statusText:
+											typeof streamingError === "object" &&
+											streamingError !== null &&
+											"details" in streamingError &&
+											typeof streamingError.details === "object" &&
+											streamingError.details !== null &&
+											"statusText" in streamingError.details &&
+											typeof streamingError.details.statusText === "string"
+												? streamingError.details.statusText
+												: "Streaming Error",
+										responseText:
+											typeof streamingError === "object" &&
+											streamingError !== null &&
+											"details" in streamingError &&
+											typeof streamingError.details === "object" &&
+											streamingError.details !== null &&
+											"responseText" in streamingError.details &&
+											typeof streamingError.details.responseText === "string"
+												? streamingError.details.responseText
+												: typeof streamingError === "object" &&
+													  streamingError !== null &&
+													  "details" in streamingError
+													? JSON.stringify(streamingError)
+													: streamingError instanceof Error
+														? streamingError.message
+														: String(streamingError),
+									}
+								: null,
+							streamed: true,
+							canceled: canceled,
+							inputCost: costs.inputCost,
+							outputCost: costs.outputCost,
+							cachedInputCost: costs.cachedInputCost,
+							requestCost: costs.requestCost,
+							webSearchCost: costs.webSearchCost,
+							imageInputTokens: costs.imageInputTokens?.toString() ?? null,
+							imageOutputTokens: costs.imageOutputTokens?.toString() ?? null,
+							imageInputCost: costs.imageInputCost ?? null,
+							imageOutputCost: costs.imageOutputCost ?? null,
+							cost: costs.totalCost,
+							estimatedCost: costs.estimatedCost,
+							discount: costs.discount,
+							pricingTier: costs.pricingTier,
+							dataStorageCost: shouldIncludeTokensForBilling
+								? calculateDataStorageCost(
+										calculatedPromptTokens,
+										cachedTokens,
+										calculatedCompletionTokens,
+										calculatedReasoningTokens,
+										retentionLevel,
+									)
+								: "0",
+							cached: false,
+							tools,
+							toolResults: streamingToolCalls,
+							toolChoice: tool_choice,
+						});
+
+						// Report key health for the selected token source
 						if (envVarName !== undefined) {
 							if (streamingError !== null) {
-								reportKeyError(envVarName, configIndex, 500);
+								reportKeyError(
+									envVarName,
+									configIndex,
+									streamingErrorStatusCode,
+								);
 							} else {
 								reportKeySuccess(envVarName, configIndex);
+							}
+						}
+						if (providerKey?.id) {
+							if (streamingError !== null) {
+								reportTrackedKeyError(providerKey.id, streamingErrorStatusCode);
+							} else {
+								reportTrackedKeySuccess(providerKey.id);
 							}
 						}
 
@@ -7041,6 +7770,7 @@ chat.openapi(completions, async (c) => {
 				} else {
 					logger.error("Streaming request error (escaped handler)", error);
 				}
+				finishStreamCompletion(c);
 			},
 		);
 	}
@@ -7115,65 +7845,8 @@ chat.openapi(completions, async (c) => {
 			}
 
 			try {
-				const ctx = await resolveProviderContext(
-					nextProvider,
-					{
-						mode: project.mode,
-						organizationId: project.organizationId,
-					},
-					{
-						id: organization.id,
-						credits: organization.credits,
-						devPlan: organization.devPlan,
-						devPlanCreditsLimit: organization.devPlanCreditsLimit,
-						devPlanCreditsUsed: organization.devPlanCreditsUsed,
-						devPlanExpiresAt: organization.devPlanExpiresAt,
-					},
-					modelInfo,
-					originalRequestParams,
-					{
-						requestId,
-						stream,
-						effectiveStream,
-						messages: messages as BaseMessage[],
-						response_format,
-						tools,
-						tool_choice,
-						reasoning_effort,
-						reasoning_max_tokens,
-						effort,
-						webSearchTool,
-						image_config,
-						sensitive_word_check,
-						maxImageSizeMB,
-						userPlan,
-						hasExistingToolCalls,
-						customProviderName,
-						webSearchEnabled: !!webSearchTool,
-					},
-				);
-				usedProvider = ctx.usedProvider;
-				usedModel = ctx.usedModel;
-				usedModelFormatted = ctx.usedModelFormatted;
-				usedModelMapping = ctx.usedModelMapping;
-				baseModelName = ctx.baseModelName;
-				usedToken = ctx.usedToken;
-				providerKey = ctx.providerKey;
-				configIndex = ctx.configIndex;
-				envVarName = ctx.envVarName;
-				url = ctx.url;
-				requestBody = ctx.requestBody;
-				useResponsesApi = ctx.useResponsesApi;
-				requestCanBeCanceled = ctx.requestCanBeCanceled;
-				isImageGeneration = ctx.isImageGeneration;
-				supportsReasoning = ctx.supportsReasoning;
-				splitTaggedReasoning = ctx.splitTaggedReasoning ?? false;
-				temperature = ctx.temperature;
-				max_tokens = ctx.max_tokens;
-				top_p = ctx.top_p;
-				frequency_penalty = ctx.frequency_penalty;
-				presence_penalty = ctx.presence_penalty;
-				usedRegion = ctx.usedRegion;
+				const ctx = await resolveProviderContextForRetry(nextProvider, stream);
+				applyResolvedProviderContext(ctx);
 			} catch {
 				failedProviderIds.add(
 					providerRetryKey(nextProvider.providerId, nextProvider.region),
@@ -7192,9 +7865,12 @@ chat.openapi(completions, async (c) => {
 
 		try {
 			const headers = getProviderHeaders(usedProvider, usedToken, {
+				requestId,
 				webSearchEnabled: !!webSearchTool,
 			});
-			headers["Content-Type"] = "application/json";
+			if (!(requestBody instanceof FormData)) {
+				headers["Content-Type"] = "application/json";
+			}
 
 			// Add effort beta header for Anthropic if effort parameter is specified
 			if (usedProvider === "anthropic" && effort !== undefined) {
@@ -7224,7 +7900,10 @@ chat.openapi(completions, async (c) => {
 			res = await fetch(url, {
 				method: "POST",
 				headers,
-				body: JSON.stringify(requestBody),
+				body:
+					requestBody instanceof FormData
+						? requestBody
+						: JSON.stringify(requestBody),
 				signal: fetchSignal,
 			});
 		} catch (error) {
@@ -7267,7 +7946,24 @@ chat.openapi(completions, async (c) => {
 				),
 			});
 
+			// Log the error in the database
+			// Extract plugin IDs for logging (non-streaming fetch error)
+			const nonStreamingFetchErrorPluginIds = plugins?.map((p) => p.id) ?? [];
+
 			// Check if we should retry before logging so we can mark the log as retried
+			let sameProviderRetryContext: Awaited<
+				ReturnType<typeof resolveProviderContext>
+			> | null = null;
+			if (isRetryableErrorType("network_error")) {
+				rememberFailedKey(usedProvider, usedRegion, {
+					envVarName,
+					configIndex,
+					providerKeyId: providerKey?.id,
+				});
+				sameProviderRetryContext =
+					await tryResolveAlternateKeyForCurrentProvider(stream);
+			}
+
 			const willRetryFetchNonStreaming = shouldRetryRequest({
 				requestedProvider,
 				noFallback,
@@ -7279,94 +7975,130 @@ chat.openapi(completions, async (c) => {
 					1,
 				usedProvider,
 			});
+			const willRetrySameProvider = sameProviderRetryContext !== null;
+			const willRetryRequest =
+				willRetrySameProvider || willRetryFetchNonStreaming;
 
-			enqueueChatLog(
-				c,
-				{
-					providerKeyId: providerKey?.id,
-					usedModel: usedModelFormatted,
-					usedModelMapping,
-					usedProvider,
-					requestedModel: initialRequestedModel,
-					requestedProvider,
-					messages,
-					temperature,
-					max_tokens,
-					top_p,
-					frequency_penalty,
-					presence_penalty,
-					reasoningEffort: reasoning_effort,
-					reasoningMaxTokens: reasoning_max_tokens,
-					effort,
-					responseFormat: response_format,
-					tools,
-					toolChoice: tool_choice,
-					source,
-					customHeaders,
-					debugMode,
-					userAgent,
-					imageConfig: image_config,
-					routingMetadata,
-					rawRequest: rawBody,
-					rawResponse: null,
-					upstreamRequest: requestBody,
-					upstreamResponse: null,
-					plugins: requestPluginIds,
-					pluginResults: undefined,
-				},
-				{
-					duration: perAttemptDuration,
-					timeToFirstToken: null,
-					timeToFirstReasoningToken: null,
-					responseSize: 0,
-					content: null,
-					reasoningContent: null,
-					finishReason: "upstream_error",
-					promptTokens: null,
-					completionTokens: null,
-					totalTokens: null,
-					reasoningTokens: null,
-					cachedTokens: null,
-					hasError: true,
-					streamed: false,
-					canceled: false,
-					errorDetails: {
-						statusCode: 0,
-						statusText: fetchError.name,
-						responseText: errorMessage,
-						cause: nonStreamingFetchCause,
-					},
-					cachedInputCost: null,
-					requestCost: null,
-					webSearchCost: null,
-					imageInputTokens: null,
-					imageOutputTokens: null,
-					imageInputCost: null,
-					imageOutputCost: null,
-					estimatedCost: false,
-					discount: null,
-					dataStorageCost: "0",
-					cached: false,
-					toolResults: null,
-					retried: willRetryFetchNonStreaming,
-					retriedByLogId: willRetryFetchNonStreaming ? finalLogId : null,
-				},
+			const baseLogEntry = createLogEntry(
+				requestId,
+				project,
+				apiKey,
+				providerKey?.id,
+				usedModelFormatted,
+				usedModelMapping,
+				usedProvider,
+				initialRequestedModel,
+				requestedProvider,
+				messages,
+				temperature,
+				max_tokens,
+				top_p,
+				frequency_penalty,
+				presence_penalty,
+				reasoning_effort,
+				reasoning_max_tokens,
+				effort,
+				response_format,
+				tools,
+				tool_choice,
+				source,
+				customHeaders,
+				debugMode,
+				userAgent,
+				image_config,
+				routingMetadata,
+				rawBody,
+				null, // No response for fetch error
+				requestBody, // The request that resulted in error
+				null, // No upstream response for fetch error
+				nonStreamingFetchErrorPluginIds,
+				undefined, // No plugin results for error case
 			);
+			const attemptLogId = shortid();
 
-			// Report key health for environment-based tokens
+			await insertLogEntry({
+				...baseLogEntry,
+				id: attemptLogId,
+				duration: perAttemptDuration,
+				timeToFirstToken: null, // Not applicable for error case
+				timeToFirstReasoningToken: null, // Not applicable for error case
+				responseSize: 0,
+				content: null,
+				reasoningContent: null,
+				finishReason: "upstream_error",
+				promptTokens: null,
+				completionTokens: null,
+				totalTokens: null,
+				reasoningTokens: null,
+				cachedTokens: null,
+				hasError: true,
+				streamed: false,
+				canceled: false,
+				errorDetails: {
+					statusCode: 0,
+					statusText: fetchError.name,
+					responseText: errorMessage,
+					cause: nonStreamingFetchCause,
+				},
+				cachedInputCost: null,
+				requestCost: null,
+				webSearchCost: null,
+				imageInputTokens: null,
+				imageOutputTokens: null,
+				imageInputCost: null,
+				imageOutputCost: null,
+				estimatedCost: false,
+				discount: null,
+				dataStorageCost: "0",
+				cached: false,
+				toolResults: null,
+				retried: willRetryRequest,
+				retriedByLogId: willRetryRequest ? finalLogId : null,
+			});
+
+			// Report key health for the selected token source
 			if (envVarName !== undefined) {
 				reportKeyError(envVarName, configIndex, 0);
 			}
+			if (providerKey?.id) {
+				reportTrackedKeyError(providerKey.id, 0);
+			}
+
+			if (willRetrySameProvider && sameProviderRetryContext) {
+				routingAttempts.push(
+					buildRoutingAttempt(
+						usedProvider,
+						baseModelName,
+						0,
+						getErrorType(0),
+						false,
+						{
+							region: usedRegion,
+							apiKeyHash: usedApiKeyHash,
+							logId: attemptLogId,
+						},
+					),
+				);
+				applyResolvedProviderContext(sameProviderRetryContext);
+				retryAttempt--;
+				continue;
+			}
 
 			if (willRetryFetchNonStreaming) {
-				routingAttempts.push({
-					provider: usedProvider,
-					model: baseModelName,
-					...(usedRegion && { region: usedRegion }),
-					status_code: 0,
-					error_type: getErrorType(0),
-					succeeded: false,
-				});
+				routingAttempts.push(
+					buildRoutingAttempt(
+						usedProvider,
+						baseModelName,
+						0,
+						getErrorType(0),
+						false,
+						{
+							region: usedRegion,
+							apiKeyHash: usedApiKeyHash,
+							logId: attemptLogId,
+						},
+					),
+				);
 				failedProviderIds.add(providerRetryKey(usedProvider, usedRegion));
 				continue;
 			}
@@ -7393,6 +8125,10 @@ chat.openapi(completions, async (c) => {
 
 		// If the request was canceled, log it and return a response
 		if (canceled) {
+			// Log the canceled request
+			// Extract plugin IDs for logging (canceled non-streaming)
+			const canceledNonStreamingPluginIds = plugins?.map((p) => p.id) ?? [];
+
 			// Calculate costs for cancelled request if billing is enabled
 			const billCancelled = shouldBillCancelledRequests();
 			let cancelledCosts: Awaited<ReturnType<typeof calculateCosts>> | null =
@@ -7433,92 +8169,89 @@ chat.openapi(completions, async (c) => {
 				);
 			}
 
-			enqueueChatLog(
-				c,
-				{
-					providerKeyId: providerKey?.id,
-					usedModel: usedModelFormatted,
-					usedModelMapping,
-					usedProvider,
-					requestedModel: initialRequestedModel,
-					requestedProvider,
-					messages,
-					temperature,
-					max_tokens,
-					top_p,
-					frequency_penalty,
-					presence_penalty,
-					reasoningEffort: reasoning_effort,
-					reasoningMaxTokens: reasoning_max_tokens,
-					effort,
-					responseFormat: response_format,
-					tools,
-					toolChoice: tool_choice,
-					source,
-					customHeaders,
-					debugMode,
-					userAgent,
-					imageConfig: image_config,
-					routingMetadata,
-					rawRequest: rawBody,
-					rawResponse: null,
-					upstreamRequest: requestBody,
-					upstreamResponse: null,
-					plugins: requestPluginIds,
-					pluginResults: undefined,
-				},
-				{
-					duration,
-					timeToFirstToken: null,
-					timeToFirstReasoningToken: null,
-					responseSize: 0,
-					content: null,
-					reasoningContent: null,
-					finishReason: "canceled",
-					promptTokens: billCancelled
-						? (
-								cancelledCosts?.promptTokens ?? estimatedPromptTokens
-							)?.toString()
-						: null,
-					completionTokens: billCancelled ? "0" : null,
-					totalTokens: billCancelled
-						? (
-								cancelledCosts?.promptTokens ?? estimatedPromptTokens
-							)?.toString()
-						: null,
-					reasoningTokens: null,
-					cachedTokens: null,
-					hasError: false,
-					streamed: false,
-					canceled: true,
-					errorDetails: null,
-					inputCost: cancelledCosts?.inputCost ?? null,
-					outputCost: cancelledCosts?.outputCost ?? null,
-					cachedInputCost: cancelledCosts?.cachedInputCost ?? null,
-					requestCost: cancelledCosts?.requestCost ?? null,
-					webSearchCost: cancelledCosts?.webSearchCost ?? null,
-					imageInputTokens:
-						cancelledCosts?.imageInputTokens?.toString() ?? null,
-					imageOutputTokens:
-						cancelledCosts?.imageOutputTokens?.toString() ?? null,
-					imageInputCost: cancelledCosts?.imageInputCost ?? null,
-					imageOutputCost: cancelledCosts?.imageOutputCost ?? null,
-					cost: cancelledCosts?.totalCost ?? null,
-					estimatedCost: cancelledCosts?.estimatedCost ?? false,
-					discount: cancelledCosts?.discount ?? null,
-					dataStorageCost: billCancelled
-						? calculateDataStorageCost(
-								cancelledCosts?.promptTokens ?? estimatedPromptTokens,
-								null,
-								0,
-								null,
-								retentionLevel,
-							)
-						: "0",
-					cached: false,
-					toolResults: null,
-				},
+			const baseLogEntry = createLogEntry(
+				requestId,
+				project,
+				apiKey,
+				providerKey?.id,
+				usedModelFormatted,
+				usedModelMapping,
+				usedProvider,
+				initialRequestedModel,
+				requestedProvider,
+				messages,
+				temperature,
+				max_tokens,
+				top_p,
+				frequency_penalty,
+				presence_penalty,
+				reasoning_effort,
+				reasoning_max_tokens,
+				effort,
+				response_format,
+				tools,
+				tool_choice,
+				source,
+				customHeaders,
+				debugMode,
+				userAgent,
+				image_config,
+				routingMetadata,
+				rawBody,
+				null, // No response for canceled request
+				requestBody, // The request that was prepared before cancellation
+				null, // No upstream response for canceled request
+				canceledNonStreamingPluginIds,
+				undefined, // No plugin results for canceled request
 			);
+
+			await insertLogEntry({
+				...baseLogEntry,
+				duration,
+				timeToFirstToken: null, // Not applicable for canceled request
+				timeToFirstReasoningToken: null, // Not applicable for canceled request
+				responseSize: 0,
+				content: null,
+				reasoningContent: null,
+				finishReason: "canceled",
+				promptTokens: billCancelled
+					? (cancelledCosts?.promptTokens ?? estimatedPromptTokens)?.toString()
+					: null,
+				completionTokens: billCancelled ? "0" : null,
+				totalTokens: billCancelled
+					? (cancelledCosts?.promptTokens ?? estimatedPromptTokens)?.toString()
+					: null,
+				reasoningTokens: null,
+				cachedTokens: null,
+				hasError: false,
+				streamed: false,
+				canceled: true,
+				errorDetails: null,
+				inputCost: cancelledCosts?.inputCost ?? null,
+				outputCost: cancelledCosts?.outputCost ?? null,
+				cachedInputCost: cancelledCosts?.cachedInputCost ?? null,
+				requestCost: cancelledCosts?.requestCost ?? null,
+				webSearchCost: cancelledCosts?.webSearchCost ?? null,
+				imageInputTokens: cancelledCosts?.imageInputTokens?.toString() ?? null,
+				imageOutputTokens:
+					cancelledCosts?.imageOutputTokens?.toString() ?? null,
+				imageInputCost: cancelledCosts?.imageInputCost ?? null,
+				imageOutputCost: cancelledCosts?.imageOutputCost ?? null,
+				cost: cancelledCosts?.totalCost ?? null,
+				estimatedCost: cancelledCosts?.estimatedCost ?? false,
+				discount: cancelledCosts?.discount ?? null,
+				dataStorageCost: billCancelled
+					? calculateDataStorageCost(
+							cancelledCosts?.promptTokens ?? estimatedPromptTokens,
+							null,
+							0,
+							null,
+							retentionLevel,
+						)
+					: "0",
+				cached: false,
+				toolResults: null,
+			});
 
 			return c.json(
 				{
@@ -7561,76 +8294,79 @@ chat.openapi(completions, async (c) => {
 						),
 					});
 
-					enqueueChatLog(
-						c,
-						{
-							providerKeyId: providerKey?.id,
-							usedModel: usedModelFormatted,
-							usedModelMapping,
-							usedProvider,
-							requestedModel: initialRequestedModel,
-							requestedProvider,
-							messages,
-							temperature,
-							max_tokens,
-							top_p,
-							frequency_penalty,
-							presence_penalty,
-							reasoningEffort: reasoning_effort,
-							reasoningMaxTokens: reasoning_max_tokens,
-							effort,
-							responseFormat: response_format,
-							tools,
-							toolChoice: tool_choice,
-							source,
-							customHeaders,
-							debugMode,
-							userAgent,
-							imageConfig: image_config,
-							routingMetadata,
-							rawRequest: rawBody,
-							rawResponse: null,
-							upstreamRequest: requestBody,
-							upstreamResponse: null,
-							plugins: requestPluginIds,
-							pluginResults: undefined,
-						},
-						{
-							duration: Date.now() - perAttemptStartTime,
-							timeToFirstToken: null,
-							timeToFirstReasoningToken: null,
-							responseSize: 0,
-							content: null,
-							reasoningContent: null,
-							finishReason: "upstream_error",
-							promptTokens: null,
-							completionTokens: null,
-							totalTokens: null,
-							reasoningTokens: null,
-							cachedTokens: null,
-							hasError: true,
-							streamed: false,
-							canceled: false,
-							errorDetails: {
-								statusCode: res.status,
-								statusText: "TimeoutError",
-								responseText: errorMessage,
-								cause: bodyErrorCause,
-							},
-							cachedInputCost: null,
-							requestCost: null,
-							webSearchCost: null,
-							imageInputTokens: null,
-							imageOutputTokens: null,
-							imageInputCost: null,
-							imageOutputCost: null,
-							estimatedCost: false,
-							discount: null,
-							dataStorageCost: "0",
-							cached: false,
-							toolResults: null,
-						},
+					const bodyTimeoutPluginIds = plugins?.map((p) => p.id) ?? [];
+					const baseLogEntry = createLogEntry(
+						requestId,
+						project,
+						apiKey,
+						providerKey?.id,
+						usedModelFormatted,
+						usedModelMapping!,
+						usedProvider!,
+						initialRequestedModel,
+						requestedProvider,
+						messages,
+						temperature,
+						max_tokens,
+						top_p,
+						frequency_penalty,
+						presence_penalty,
+						reasoning_effort,
+						reasoning_max_tokens,
+						effort,
+						response_format,
+						tools,
+						tool_choice,
+						source,
+						customHeaders,
+						debugMode,
+						userAgent,
+						image_config,
+						routingMetadata,
+						rawBody,
+						null,
+						requestBody,
+						null,
+						bodyTimeoutPluginIds,
+						undefined,
 					);
+
+					await insertLogEntry({
+						...baseLogEntry,
+						duration: Date.now() - perAttemptStartTime,
+						timeToFirstToken: null,
+						timeToFirstReasoningToken: null,
+						responseSize: 0,
+						content: null,
+						reasoningContent: null,
+						finishReason: "upstream_error",
+						promptTokens: null,
+						completionTokens: null,
+						totalTokens: null,
+						reasoningTokens: null,
+						cachedTokens: null,
+						hasError: true,
+						streamed: false,
+						canceled: false,
+						errorDetails: {
+							statusCode: res.status,
+							statusText: "TimeoutError",
+							responseText: errorMessage,
+							cause: bodyErrorCause,
+						},
+						cachedInputCost: null,
+						requestCost: null,
+						webSearchCost: null,
+						imageInputTokens: null,
+						imageOutputTokens: null,
+						imageInputCost: null,
+						imageOutputCost: null,
+						estimatedCost: false,
+						discount: null,
+						dataStorageCost: "0",
+						cached: false,
+						toolResults: null,
+					});
 
 					return c.json(
 						{
@@ -7674,6 +8410,23 @@ chat.openapi(completions, async (c) => {
 				});
 			}
 
+			// Log the request in the database
+			// Extract plugin IDs for logging
+			const providerErrorPluginIds = plugins?.map((p) => p.id) ?? [];
+
+			let sameProviderRetryContext: Awaited<
+				ReturnType<typeof resolveProviderContext>
+			> | null = null;
+			if (isRetryableErrorType(finishReason)) {
+				rememberFailedKey(usedProvider, usedRegion, {
+					envVarName,
+					configIndex,
+					providerKeyId: providerKey?.id,
+				});
+				sameProviderRetryContext =
+					await tryResolveAlternateKeyForCurrentProvider(stream);
+			}
+
 			// Check if we should retry before logging so we can mark the log as retried
 			const willRetryHttpNonStreaming = shouldRetryRequest({
 				requestedProvider,
@@ -7686,112 +8439,150 @@ chat.openapi(completions, async (c) => {
 					1,
 				usedProvider,
 			});
+			const willRetrySameProvider = sameProviderRetryContext !== null;
+			const willRetryRequest =
+				willRetrySameProvider || willRetryHttpNonStreaming;
 
-			enqueueChatLog(
-				c,
-				{
-					providerKeyId: providerKey?.id,
-					usedModel: usedModelFormatted,
-					usedModelMapping,
-					usedProvider,
-					requestedModel: initialRequestedModel,
-					requestedProvider,
-					messages,
-					temperature,
-					max_tokens,
-					top_p,
-					frequency_penalty,
-					presence_penalty,
-					reasoningEffort: reasoning_effort,
-					reasoningMaxTokens: reasoning_max_tokens,
-					effort,
-					responseFormat: response_format,
-					tools,
-					toolChoice: tool_choice,
-					source,
-					customHeaders,
-					debugMode,
-					userAgent,
-					imageConfig: image_config,
-					routingMetadata,
-					rawRequest: rawBody,
-					rawResponse: errorResponseText,
-					upstreamRequest: requestBody,
-					upstreamResponse: errorResponseText,
-					plugins: requestPluginIds,
-					pluginResults: undefined,
-				},
-				{
-					duration: perAttemptDuration,
-					timeToFirstToken: null,
-					timeToFirstReasoningToken: null,
-					responseSize: errorResponseText.length,
-					content: null,
-					reasoningContent: null,
-					finishReason,
-					promptTokens: null,
-					completionTokens: null,
-					totalTokens: null,
-					reasoningTokens: null,
-					cachedTokens: null,
-					hasError: finishReason !== "content_filter",
-					streamed: false,
-					canceled: false,
-					errorDetails: (() => {
-						if (finishReason === "content_filter") {
-							return null;
-						}
-						if (finishReason === "client_error") {
-							try {
-								const originalError = JSON.parse(errorResponseText);
-								return {
-									statusCode: res.status,
-									statusText: res.statusText,
-									responseText: errorResponseText,
-									message: originalError.error?.message ?? errorResponseText,
-								};
-							} catch {
-								// If parsing fails, use default format
-							}
-						}
-						return {
-							statusCode: res.status,
-							statusText: res.statusText,
-							responseText: errorResponseText,
-						};
-					})(),
-					cachedInputCost: null,
-					requestCost: null,
-					webSearchCost: null,
-					imageInputTokens: null,
-					imageOutputTokens: null,
-					imageInputCost: null,
-					imageOutputCost: null,
-					estimatedCost: false,
-					discount: null,
-					dataStorageCost: "0",
-					cached: false,
-					toolResults: null,
-					retried: willRetryHttpNonStreaming,
-					retriedByLogId: willRetryHttpNonStreaming ? finalLogId : null,
-				},
+			const baseLogEntry = createLogEntry(
+				requestId,
+				project,
+				apiKey,
+				providerKey?.id,
+				usedModelFormatted,
+				usedModelMapping,
+				usedProvider,
+				initialRequestedModel,
+				requestedProvider,
+				messages,
+				temperature,
+				max_tokens,
+				top_p,
+				frequency_penalty,
+				presence_penalty,
+				reasoning_effort,
+				reasoning_max_tokens,
+				effort,
+				response_format,
+				tools,
+				tool_choice,
+				source,
+				customHeaders,
+				debugMode,
+				userAgent,
+				image_config,
+				routingMetadata,
+				rawBody,
+				errorResponseText, // Our formatted error response
+				requestBody, // The request that resulted in error
+				errorResponseText, // Raw upstream error response
+				providerErrorPluginIds,
+				undefined, // No plugin results for error case
 			);
+			const attemptLogId = shortid();
 
-			// Report key health for environment-based tokens
+			await insertLogEntry({
+				...baseLogEntry,
+				id: attemptLogId,
+				duration: perAttemptDuration,
+				timeToFirstToken: null, // Not applicable for error case
+				timeToFirstReasoningToken: null, // Not applicable for error case
+				responseSize: errorResponseText.length,
+				content: null,
+				reasoningContent: null,
+				finishReason,
+				promptTokens: null,
+				completionTokens: null,
+				totalTokens: null,
+				reasoningTokens: null,
+				cachedTokens: null,
+				hasError: finishReason !== "content_filter", // content_filter is not an error
+				streamed: false,
+				canceled: false,
+				errorDetails: (() => {
+					// content_filter is not an error, no error details needed
+					if (finishReason === "content_filter") {
+						return null;
+					}
+					// For client errors, try to parse the original error and include the message
+					if (finishReason === "client_error") {
+						try {
+							const originalError = JSON.parse(errorResponseText);
+							return {
+								statusCode: res.status,
+								statusText: res.statusText,
+								responseText: errorResponseText,
+								message: originalError.error?.message ?? errorResponseText,
+							};
+						} catch {
+							// If parsing fails, use default format
+						}
+					}
+					return {
+						statusCode: res.status,
+						statusText: res.statusText,
+						responseText: errorResponseText,
+					};
+				})(),
+				cachedInputCost: null,
+				requestCost: null,
+				webSearchCost: null,
+				imageInputTokens: null,
+				imageOutputTokens: null,
+				imageInputCost: null,
+				imageOutputCost: null,
+				estimatedCost: false,
+				discount: null,
+				dataStorageCost: "0",
+				cached: false,
+				toolResults: null,
+				retried: willRetryRequest,
+				retriedByLogId: willRetryRequest ? finalLogId : null,
+			});
+
+			// Report key health for the selected token source
 			// Don't report content_filter as a key error - it's intentional provider behavior
 			if (envVarName !== undefined && finishReason !== "content_filter") {
 				reportKeyError(envVarName, configIndex, res.status, errorResponseText);
 			}
+			if (providerKey?.id && finishReason !== "content_filter") {
+				reportTrackedKeyError(providerKey.id, res.status, errorResponseText);
+			}
+
+			if (willRetrySameProvider && sameProviderRetryContext) {
+				routingAttempts.push(
+					buildRoutingAttempt(
+						usedProvider,
+						baseModelName,
+						res.status,
+						getErrorType(res.status),
+						false,
+						{
+							region: usedRegion,
+							apiKeyHash: usedApiKeyHash,
+							logId: attemptLogId,
+						},
+					),
+				);
+				applyResolvedProviderContext(sameProviderRetryContext);
+				retryAttempt--;
+				continue;
+			}
 
 			if (willRetryHttpNonStreaming) {
-				routingAttempts.push({
-					provider: usedProvider,
-					model: baseModelName,
-					...(usedRegion && { region: usedRegion }),
-					status_code: res.status,
-					error_type: getErrorType(res.status),
-					succeeded: false,
-				});
+				routingAttempts.push(
+					buildRoutingAttempt(
+						usedProvider,
+						baseModelName,
+						res.status,
+						getErrorType(res.status),
+						false,
+						{
+							region: usedRegion,
+							apiKeyHash: usedApiKeyHash,
+							logId: attemptLogId,
+						},
+					),
+				);
 				failedProviderIds.add(providerRetryKey(usedProvider, usedRegion));
 				continue;
 			}
@@ -7820,6 +8611,7 @@ chat.openapi(completions, async (c) => {
 						total_tokens: 0,
 					},
 					metadata: {
+						request_id: requestId,
 						requested_model: initialRequestedModel,
 						requested_provider: requestedProvider,
 						used_model: baseModelName,
@@ -7864,14 +8656,20 @@ chat.openapi(completions, async (c) => {
 
 	// Add the final attempt (successful or last failed) to routing
 	if (res && res.ok && usedProvider) {
-		routingAttempts.push({
-			provider: usedProvider,
-			model: baseModelName,
-			...(usedRegion && { region: usedRegion }),
-			status_code: res.status,
-			error_type: "none",
-			succeeded: true,
-		});
+		routingAttempts.push(
+			buildRoutingAttempt(
+				usedProvider,
+				baseModelName,
+				res.status,
+				"none",
+				true,
+				{
+					region: usedRegion,
+					apiKeyHash: usedApiKeyHash,
+					logId: finalLogId,
+				},
+			),
+		);
 	}
 
 	// Update routingMetadata with all routing attempts for DB logging
@@ -7920,7 +8718,92 @@ chat.openapi(completions, async (c) => {
 
 	let json: any;
 	try {
-		json = await res.json();
+		if (forceStream && res.body) {
+			// Stream-only model: upstream returned SSE but client expects JSON.
+			// Read the full stream and assemble a non-streaming response.
+			const text = await res.text();
+			const lines = text.split("\n");
+			let content = "";
+			const toolCalls: any[] = [];
+			let finishReason: string | null = null;
+			let usage: any = null;
+			let responseId = "";
+			let model = "";
+			let created = 0;
+
+			for (const line of lines) {
+				if (!line.startsWith("data: ") || line === "data: [DONE]") {
+					continue;
+				}
+				try {
+					const chunk = JSON.parse(line.slice(6));
+					if (!responseId && chunk.id) {
+						responseId = chunk.id;
+					}
+					if (!model && chunk.model) {
+						model = chunk.model;
+					}
+					if (!created && chunk.created) {
+						created = chunk.created;
+					}
+					const delta = chunk.choices?.[0]?.delta;
+					if (delta?.content) {
+						content += delta.content;
+					}
+					if (delta?.tool_calls) {
+						for (const tc of delta.tool_calls) {
+							const idx = tc.index ?? 0;
+							if (!toolCalls[idx]) {
+								toolCalls[idx] = {
+									id: tc.id ?? "",
+									type: tc.type ?? "function",
+									function: { name: tc.function?.name ?? "", arguments: "" },
+								};
+							} else {
+								if (tc.id) {
+									toolCalls[idx].id = tc.id;
+								}
+								if (tc.function?.name) {
+									toolCalls[idx].function.name = tc.function.name;
+								}
+							}
+							if (tc.function?.arguments) {
+								toolCalls[idx].function.arguments += tc.function.arguments;
+							}
+						}
+					}
+					if (chunk.choices?.[0]?.finish_reason) {
+						finishReason = chunk.choices[0].finish_reason;
+					}
+					if (chunk.usage) {
+						usage = chunk.usage;
+					}
+				} catch {
+					// skip unparseable lines
+				}
+			}
+
+			json = {
+				id: responseId,
+				object: "chat.completion",
+				created,
+				model,
+				choices: [
+					{
+						index: 0,
+						message: {
+							role: "assistant",
+							content: content || null,
+							...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+						},
+						finish_reason: finishReason ?? "stop",
+					},
+				],
+				...(usage ? { usage } : {}),
+			};
+		} else {
+			json = await res.json();
+		}
 	} catch (bodyError) {
 		if (isTimeoutError(bodyError)) {
 			const errorMessage =
@@ -7939,76 +8822,79 @@ chat.openapi(completions, async (c) => {
 				),
 			});
 
-			enqueueChatLog(
-				c,
-				{
-					providerKeyId: providerKey?.id,
-					usedModel: usedModelFormatted,
-					usedModelMapping,
-					usedProvider,
-					requestedModel: initialRequestedModel,
-					requestedProvider,
-					messages,
-					temperature,
-					max_tokens,
-					top_p,
-					frequency_penalty,
-					presence_penalty,
-					reasoningEffort: reasoning_effort,
-					reasoningMaxTokens: reasoning_max_tokens,
-					effort,
-					responseFormat: response_format,
-					tools,
-					toolChoice: tool_choice,
-					source,
-					customHeaders,
-					debugMode,
-					userAgent,
-					imageConfig: image_config,
-					routingMetadata,
-					rawRequest: rawBody,
-					rawResponse: null,
-					upstreamRequest: requestBody,
-					upstreamResponse: null,
-					plugins: requestPluginIds,
-					pluginResults: undefined,
-				},
-				{
-					duration: Date.now() - startTime,
-					timeToFirstToken: null,
-					timeToFirstReasoningToken: null,
-					responseSize: 0,
-					content: null,
-					reasoningContent: null,
-					finishReason: "upstream_error",
-					promptTokens: null,
-					completionTokens: null,
-					totalTokens: null,
-					reasoningTokens: null,
-					cachedTokens: null,
-					hasError: true,
-					streamed: false,
-					canceled: false,
-					errorDetails: {
-						statusCode: res.status,
-						statusText: "TimeoutError",
-						responseText: errorMessage,
-						cause: bodyReadCause,
-					},
-					cachedInputCost: null,
-					requestCost: null,
-					webSearchCost: null,
-					imageInputTokens: null,
-					imageOutputTokens: null,
-					imageInputCost: null,
-					imageOutputCost: null,
-					estimatedCost: false,
-					discount: null,
-					dataStorageCost: "0",
-					cached: false,
-					toolResults: null,
-				},
+			const bodyTimeoutPluginIds = plugins?.map((p) => p.id) ?? [];
+			const baseLogEntry = createLogEntry(
+				requestId,
+				project,
+				apiKey,
+				providerKey?.id,
+				usedModelFormatted!,
+				usedModelMapping,
+				usedProvider,
+				initialRequestedModel,
+				requestedProvider,
+				messages,
+				temperature,
+				max_tokens,
+				top_p,
+				frequency_penalty,
+				presence_penalty,
+				reasoning_effort,
+				reasoning_max_tokens,
+				effort,
+				response_format,
+				tools,
+				tool_choice,
+				source,
+				customHeaders,
+				debugMode,
+				userAgent,
+				image_config,
+				routingMetadata,
+				rawBody,
+				null,
+				requestBody,
+				null,
+				bodyTimeoutPluginIds,
+				undefined,
 			);
+
+			await insertLogEntry({
+				...baseLogEntry,
+				duration: Date.now() - startTime,
+				timeToFirstToken: null,
+				timeToFirstReasoningToken: null,
+				responseSize: 0,
+				content: null,
+				reasoningContent: null,
+				finishReason: "upstream_error",
+				promptTokens: null,
+				completionTokens: null,
+				totalTokens: null,
+				reasoningTokens: null,
+				cachedTokens: null,
+				hasError: true,
+				streamed: false,
+				canceled: false,
+				errorDetails: {
+					statusCode: res.status,
+					statusText: "TimeoutError",
+					responseText: errorMessage,
+					cause: bodyReadCause,
+				},
+				cachedInputCost: null,
+				requestCost: null,
+				webSearchCost: null,
+				imageInputTokens: null,
+				imageOutputTokens: null,
+				imageInputCost: null,
+				imageOutputCost: null,
+				estimatedCost: false,
+				discount: null,
+				dataStorageCost: "0",
+				cached: false,
+				toolResults: null,
+			});
 
 			return c.json(
 				{
@@ -8050,6 +8936,7 @@ chat.openapi(completions, async (c) => {
 		completionTokens,
 		reasoningTokens,
 		cachedTokens,
+		cacheCreationTokens,
 		toolResults,
 		images,
 		annotations,
@@ -8176,6 +9063,13 @@ chat.openapi(completions, async (c) => {
 		webSearchCount,
 		project.organizationId,
 	);
+	costs.dataStorageCost = toDataStorageCostNumber(
+		costs.promptTokens ?? calculatedPromptTokens,
+		cachedTokens,
+		costs.completionTokens ?? calculatedCompletionTokens,
+		calculatedReasoningTokens,
+		retentionLevel,
+	);
 
 	// Use costs.promptTokens as canonical value (includes image input
 	// tokens for providers that exclude them from upstream usage)
@@ -8224,31 +9118,66 @@ chat.openapi(completions, async (c) => {
 					imageInputCost: costs.imageInputCost,
 					imageOutputCost: costs.imageOutputCost,
 					totalCost: costs.totalCost,
+					dataStorageCost: costs.dataStorageCost,
 				}
 			: null,
 		false, // showUpgradeMessage - never show since Pro plan is removed
 		annotations,
 		routingAttempts.length > 0 ? routingAttempts : null,
+		requestId,
 		usedRegion,
+		cacheCreationTokens,
+	);
+
+	// Extract plugin IDs for logging
+	const pluginIds = plugins?.map((p) => p.id) ?? [];
+
+	const baseLogEntry = createLogEntry(
+		requestId,
+		project,
+		apiKey,
+		providerKey?.id,
+		usedModelFormatted,
+		usedModelMapping,
+		usedProvider,
+		initialRequestedModel,
+		requestedProvider,
+		messages,
+		temperature,
+		max_tokens,
+		top_p,
+		frequency_penalty,
+		presence_penalty,
+		reasoning_effort,
+		reasoning_max_tokens,
+		effort,
+		response_format,
+		tools,
+		tool_choice,
+		source,
+		customHeaders,
+		debugMode,
+		userAgent,
+		image_config,
+		routingMetadata,
+		rawBody,
+		transformedResponse, // Our formatted response that we return to user
+		requestBody, // The request sent to the provider
+		json, // Raw upstream response from provider
+		pluginIds,
+		Object.keys(pluginResults).length > 0 ? pluginResults : undefined,
 	);
 
 	// Check if the non-streaming response is empty (no content, tokens, or tool calls)
-	// Exclude content_filter responses as they are intentionally empty (blocked by provider)
-	// For Google, check for original finish reasons that indicate content filtering
-	// These include both finishReason values and promptFeedback.blockReason values
-	const isGoogleContentFilter =
-		isGoogleCompatibleProvider(usedProvider) &&
-		(finishReason === "SAFETY" ||
-			finishReason === "PROHIBITED_CONTENT" ||
-			finishReason === "RECITATION" ||
-			finishReason === "BLOCKLIST" ||
-			finishReason === "SPII" ||
-			finishReason === "OTHER");
+	// Exclude content filter responses as they are intentionally empty.
+	const isContentFilterResponse = isContentFilterFinishReason(
+		finishReason,
+		usedProvider,
+	);
 	const hasEmptyNonStreamingResponse =
 		!!finishReason &&
-		finishReason !== "content_filter" &&
 		finishReason !== "incomplete" &&
-		!isGoogleContentFilter &&
+		!isContentFilterResponse &&
 		!hasMeaningfulAssistantOutput({
 			completionTokens: calculatedCompletionTokens,
 			reasoningTokens: calculatedReasoningTokens,
@@ -8283,105 +9212,89 @@ chat.openapi(completions, async (c) => {
 		}
 	}
 
-	enqueueChatLog(
-		c,
-		{
-			providerKeyId: providerKey?.id,
-			usedModel: usedModelFormatted,
-			usedModelMapping,
-			usedProvider,
-			requestedModel: initialRequestedModel,
-			requestedProvider,
-			messages,
-			temperature,
-			max_tokens,
-			top_p,
-			frequency_penalty,
-			presence_penalty,
-			reasoningEffort: reasoning_effort,
-			reasoningMaxTokens: reasoning_max_tokens,
-			effort,
-			responseFormat: response_format,
-			tools,
-			toolChoice: tool_choice,
-			source,
-			customHeaders,
-			debugMode,
-			userAgent,
-			imageConfig: image_config,
-			routingMetadata,
-			rawRequest: rawBody,
-			rawResponse: transformedResponse,
-			upstreamRequest: requestBody,
-			upstreamResponse: json,
-			plugins: requestPluginIds,
-			pluginResults:
-				Object.keys(pluginResults).length > 0 ? pluginResults : undefined,
-		},
-		{
-			id: routingAttempts.length > 0 ? finalLogId : undefined,
-			duration,
-			timeToFirstToken: null,
-			timeToFirstReasoningToken: null,
-			responseSize,
-			content: content,
-			reasoningContent: reasoningContent,
-			finishReason: hasEmptyNonStreamingResponse
-				? "upstream_error"
-				: finishReason,
-			promptTokens: calculatedPromptTokens?.toString() ?? null,
-			completionTokens: calculatedCompletionTokens?.toString() ?? null,
-			totalTokens:
-				totalTokens ??
-				(
-					(calculatedPromptTokens ?? 0) + (calculatedCompletionTokens ?? 0)
-				).toString(),
-			reasoningTokens: calculatedReasoningTokens?.toString() ?? null,
-			cachedTokens: cachedTokens?.toString() ?? null,
-			hasError: hasEmptyNonStreamingResponse,
-			streamed: false,
-			canceled: false,
-			errorDetails: hasEmptyNonStreamingResponse
-				? {
-						statusCode: 500,
-						statusText: "Empty Response",
-						responseText:
-							"Response finished successfully but returned no content or tool calls",
-					}
-				: null,
-			inputCost: costs.inputCost,
-			outputCost: costs.outputCost,
-			cachedInputCost: costs.cachedInputCost,
-			requestCost: costs.requestCost,
-			webSearchCost: costs.webSearchCost,
-			imageInputTokens: costs.imageInputTokens?.toString() ?? null,
-			imageOutputTokens: costs.imageOutputTokens?.toString() ?? null,
-			imageInputCost: costs.imageInputCost ?? null,
-			imageOutputCost: costs.imageOutputCost ?? null,
-			cost: costs.totalCost,
-			estimatedCost: costs.estimatedCost,
-			discount: costs.discount,
-			pricingTier: costs.pricingTier,
-			dataStorageCost: calculateDataStorageCost(
-				calculatedPromptTokens,
-				cachedTokens,
-				calculatedCompletionTokens,
-				calculatedReasoningTokens,
-				retentionLevel,
-			),
-			cached: false,
-			toolResults,
-		},
-	);
+	// For image generation, store the base64 data URLs in content
+	// so the activity detail page can render the images
+	const base64Images =
+		convertedImages?.filter((img) => img.image_url.url.startsWith("data:")) ??
+		[];
+	const logContent =
+		base64Images.length > 0
+			? base64Images.map((img) => img.image_url.url).join("\n")
+			: content;
 
-	// Report key health for environment-based tokens
+	await insertLogEntry({
+		...baseLogEntry,
+		id: routingAttempts.length > 0 ? finalLogId : undefined,
+		duration,
+		timeToFirstToken: null, // Not applicable for non-streaming requests
+		timeToFirstReasoningToken: null, // Not applicable for non-streaming requests
+		responseSize,
+		content: logContent,
+		reasoningContent: reasoningContent,
+		finishReason: hasEmptyNonStreamingResponse
+			? "upstream_error"
+			: finishReason,
+		promptTokens: calculatedPromptTokens?.toString() ?? null,
+		completionTokens: calculatedCompletionTokens?.toString() ?? null,
+		totalTokens:
+			totalTokens ??
+			(
+				(calculatedPromptTokens ?? 0) + (calculatedCompletionTokens ?? 0)
+			).toString(),
+		reasoningTokens: calculatedReasoningTokens?.toString() ?? null,
+		cachedTokens: cachedTokens?.toString() ?? null,
+		hasError: hasEmptyNonStreamingResponse,
+		streamed: false,
+		canceled: false,
+		errorDetails: hasEmptyNonStreamingResponse
+			? {
+					statusCode: 500,
+					statusText: "Empty Response",
+					responseText:
+						"Response finished successfully but returned no content or tool calls",
+				}
+			: null,
+		inputCost: costs.inputCost,
+		outputCost: costs.outputCost,
+		cachedInputCost: costs.cachedInputCost,
+		requestCost: costs.requestCost,
+		webSearchCost: costs.webSearchCost,
+		imageInputTokens: costs.imageInputTokens?.toString() ?? null,
+		imageOutputTokens: costs.imageOutputTokens?.toString() ?? null,
+		imageInputCost: costs.imageInputCost ?? null,
+		imageOutputCost: costs.imageOutputCost ?? null,
+		cost: costs.totalCost,
+		estimatedCost: costs.estimatedCost,
+		discount: costs.discount,
+		pricingTier: costs.pricingTier,
+		dataStorageCost: calculateDataStorageCost(
+			calculatedPromptTokens,
+			cachedTokens,
+			calculatedCompletionTokens,
+			calculatedReasoningTokens,
+			retentionLevel,
+		),
+		cached: false,
+		tools,
+		toolResults,
+		toolChoice: tool_choice,
+	});
+
+	// Report key health for the selected token source
 	// Note: We don't report empty responses as key errors since they're not upstream errors
 	if (envVarName !== undefined) {
 		reportKeySuccess(envVarName, configIndex);
 	}
+	if (providerKey?.id) {
+		reportTrackedKeySuccess(providerKey.id);
+	}
 
 	if (cachingEnabled && cacheKey && !stream && !hasEmptyNonStreamingResponse) {
-		await setCache(cacheKey, transformedResponse, cacheDuration);
+		await setCache(
+			cacheKey,
+			stripRequestScopedMetadataFromOpenAiResponse(transformedResponse),
+			cacheDuration,
+		);
 	}
 
 	// For image generation models with streaming requested, convert to SSE format

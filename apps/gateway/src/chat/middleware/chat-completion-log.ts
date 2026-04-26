@@ -303,6 +303,12 @@ async function flushChatCompletionLogs(
 					internalContentFilter: state.internalContentFilter
 						? true
 						: logData.internalContentFilter,
+					gatewayContentFilterResponse:
+						logData.gatewayContentFilterResponse ??
+						(state.gatewayContentFilterResponse as
+							| LogInsertData["gatewayContentFilterResponse"]
+							| undefined) ??
+						null,
 				},
 				{ syncInsert: state.syncInsert },
 			);

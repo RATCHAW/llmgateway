@@ -304,6 +304,8 @@ export function transformStreamingToOpenai(
 					],
 					usage: normalizeAnthropicUsage(data.usage),
 				};
+			} else if (data.type === "ping") {
+				return null;
 			} else {
 				logger.warn("[streaming] Unrecognized Anthropic chunk", {
 					provider: usedProvider,

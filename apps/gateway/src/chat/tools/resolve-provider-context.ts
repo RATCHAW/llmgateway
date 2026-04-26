@@ -44,7 +44,7 @@ export interface ProviderContext {
 	configIndex: number;
 	envVarName: string | undefined;
 	url: string;
-	requestBody: ProviderRequestBody;
+	requestBody: ProviderRequestBody | FormData;
 	useResponsesApi: boolean;
 	requestCanBeCanceled: boolean;
 	isImageGeneration: boolean;
@@ -366,7 +366,7 @@ export async function resolveProviderContext(
 		providers.find((p) => p.id === usedProvider)?.cancellation === true;
 
 	// --- Request body preparation ---
-	let requestBody: ProviderRequestBody;
+	let requestBody: ProviderRequestBody | FormData;
 	try {
 		requestBody = await prepareRequestBody(
 			usedProvider as Provider,
@@ -403,6 +403,7 @@ export async function resolveProviderContext(
 
 	// Post-validation of max_tokens in request body
 	if (
+		!(requestBody instanceof FormData) &&
 		hasMaxTokens(requestBody) &&
 		requestBody.max_tokens !== undefined &&
 		providerMappingForSelected

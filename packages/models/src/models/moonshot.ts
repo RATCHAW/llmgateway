@@ -80,6 +80,7 @@ export const moonshotModels = [
 				vision: false,
 				tools: true,
 				jsonOutput: true,
+				deactivatedAt: new Date("2026-04-25"),
 			},
 			{
 				providerId: "bytedance",
@@ -273,6 +274,23 @@ export const moonshotModels = [
 				vision: true,
 				tools: false,
 				jsonOutput: false,
+			},
+			{
+				providerId: "nebius",
+				// Streaming tool calls and response_format: json_object are unreliable on Nebius
+				stability: "unstable",
+				modelName: "moonshotai/Kimi-K2.5",
+				inputPrice: 0.5 / 1e6,
+				cachedInputPrice: 0.02 / 1e6,
+				outputPrice: 2.5 / 1e6,
+				requestPrice: 0,
+				contextSize: 262144,
+				maxOutput: 32768,
+				streaming: true,
+				reasoning: true,
+				vision: true,
+				tools: true,
+				jsonOutput: true,
 			},
 			{
 				test: "skip",

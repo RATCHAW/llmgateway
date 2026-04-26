@@ -186,6 +186,22 @@ export const minimaxModels = [
 					"parallel_tool_calls",
 				],
 			},
+			{
+				providerId: "nebius",
+				// Streaming tool calls and response_format: json_object are unreliable on Nebius
+				stability: "unstable",
+				modelName: "MiniMaxAI/MiniMax-M2.5",
+				inputPrice: 0.3 / 1e6,
+				outputPrice: 1.2 / 1e6,
+				requestPrice: 0,
+				contextSize: 204800,
+				maxOutput: 131100,
+				streaming: true,
+				reasoning: true,
+				vision: false,
+				tools: true,
+				jsonOutput: true,
+			},
 		],
 	},
 	{

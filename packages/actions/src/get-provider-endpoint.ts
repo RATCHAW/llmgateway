@@ -224,7 +224,7 @@ export function getProviderEndpoint(
 				break;
 			}
 			case "nebius":
-				url = "https://api.studio.nebius.com";
+				url = "https://api.tokenfactory.nebius.com";
 				break;
 			case "zai":
 				url = "https://api.z.ai";
@@ -403,6 +403,9 @@ export function getProviderEndpoint(
 			}
 		}
 		case "openai": {
+			if (imageGenerations) {
+				return `${url}/v1/images/generations`;
+			}
 			// Use responses endpoint for models that support responses API
 			if (model) {
 				// Look up by model ID first, then fall back to provider modelName

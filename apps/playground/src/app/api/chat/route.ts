@@ -14,6 +14,7 @@ import { cookies } from "next/headers";
 import { z } from "zod";
 
 import { getUser } from "@/lib/getUser";
+import { getModelImageConfig } from "@/lib/image-gen";
 
 import { createLLMGateway } from "@llmgateway/ai-sdk-provider";
 
@@ -259,6 +260,25 @@ interface McpServerConfig {
 	enabled: boolean;
 }
 
+interface ImageFilePart {
+	type: "file";
+	url: string;
+	mediaType: string;
+}
+
+function isImageFilePart(value: unknown): value is ImageFilePart {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const v = value as Record<string, unknown>;
+	return (
+		v.type === "file" &&
+		typeof v.url === "string" &&
+		typeof v.mediaType === "string" &&
+		v.mediaType.startsWith("image/")
+	);
+}
+
 interface ChatRequestBody {
 	messages: UIMessage[];
 	model?: string;
@@ -373,6 +393,8 @@ export async function POST(req: Request) {
 	// Use generateImage for image generation models in chat mode
 	if (is_image_gen) {
 		try {
+			const maxInputImages = getModelImageConfig(selectedModel).maxInputImages;
+
 			const lastUserMessage = [...messages]
 				.reverse()
 				.find((m) => m.role === "user");
@@ -387,13 +409,40 @@ export async function POST(req: Request) {
 						.map((p) => p.text)
 						.join("\n");
 					for (const p of lastUserMessage.parts) {
-						if (
-							p.type === "file" &&
-							"url" in p &&
-							typeof p.url === "string" &&
-							"mediaType" in p &&
-							typeof p.mediaType === "string"
-						) {
+						if (fileParts.length >= maxInputImages) {
+							break;
+						}
+						if (isImageFilePart(p)) {
+							fileParts.push({
+								url: p.url,
+								mediaType: p.mediaType,
+							});
+						}
+					}
+				}
+			}
+
+			// If the current user message did not upload any images, fall back to
+			// the most recent assistant-generated image(s) so that follow-up prompts
+			// can edit the previously generated output.
+			if (fileParts.length === 0) {
+				const lastAssistantWithImage = [...messages]
+					.reverse()
+					.find(
+						(m) =>
+							m.role === "assistant" &&
+							Array.isArray(m.parts) &&
+							m.parts.some(isImageFilePart),
+					);
+				if (
+					lastAssistantWithImage &&
+					Array.isArray(lastAssistantWithImage.parts)
+				) {
+					for (const p of lastAssistantWithImage.parts) {
+						if (fileParts.length >= maxInputImages) {
+							break;
+						}
+						if (isImageFilePart(p)) {
 							fileParts.push({
 								url: p.url,
 								mediaType: p.mediaType,
@@ -427,6 +476,11 @@ export async function POST(req: Request) {
 
 			const stream = createUIMessageStream({
 				execute: async ({ writer }) => {
+					writer.write({
+						type: "start",
+						messageId: crypto.randomUUID(),
+					});
+					writer.write({ type: "start-step" });
 					for (const image of result.images) {
 						const mediaType = image.mediaType || "image/png";
 						writer.write({
@@ -435,6 +489,8 @@ export async function POST(req: Request) {
 							mediaType,
 						});
 					}
+					writer.write({ type: "finish-step" });
+					writer.write({ type: "finish", finishReason: "stop" });
 				},
 			});
 

@@ -346,16 +346,41 @@ describe("convertChatResponseToResponses", () => {
 				prompt_tokens: 10,
 				completion_tokens: 5,
 				total_tokens: 15,
-				cost_usd_total: 0.001,
-				cost_usd_input: 0.0005,
-				cost_usd_output: 0.0005,
+				cost: 0.001,
+				cost_details: {
+					upstream_inference_cost: 0.001,
+					upstream_inference_prompt_cost: 0.0005,
+					upstream_inference_completions_cost: 0.0005,
+					total_cost: 0.001,
+					input_cost: 0.0005,
+					output_cost: 0.0005,
+					cached_input_cost: 0,
+					request_cost: 0,
+					web_search_cost: 0,
+					image_input_cost: null,
+					image_output_cost: null,
+					data_storage_cost: 0.00000015,
+				},
 			},
 		};
 
 		const result = convertChatResponseToResponses(chatResponse, "gpt-4o-mini");
 
-		expect(result.usage.cost_usd_total).toBe(0.001);
-		expect(result.usage.cost_usd_input).toBe(0.0005);
+		expect(result.usage.cost).toBe(0.001);
+		expect(result.usage.cost_details).toEqual({
+			upstream_inference_cost: 0.001,
+			upstream_inference_prompt_cost: 0.0005,
+			upstream_inference_completions_cost: 0.0005,
+			total_cost: 0.001,
+			input_cost: 0.0005,
+			output_cost: 0.0005,
+			cached_input_cost: 0,
+			request_cost: 0,
+			web_search_cost: 0,
+			image_input_cost: null,
+			image_output_cost: null,
+			data_storage_cost: 0.00000015,
+		});
 	});
 });
 

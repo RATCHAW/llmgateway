@@ -2946,6 +2946,9 @@ export interface paths {
                                 status: string;
                                 logsCount: number;
                                 errorsCount: number;
+                                clientErrorsCount: number;
+                                gatewayErrorsCount: number;
+                                upstreamErrorsCount: number;
                                 cachedCount: number;
                                 avgTimeToFirstToken: number | null;
                                 providerCount: number;
@@ -3108,6 +3111,9 @@ export interface paths {
                                 timestamp: string;
                                 logsCount: number;
                                 errorsCount: number;
+                                clientErrorsCount: number;
+                                gatewayErrorsCount: number;
+                                upstreamErrorsCount: number;
                                 cachedCount: number;
                                 avgTtft: number | null;
                                 avgDuration: number | null;
@@ -3159,6 +3165,9 @@ export interface paths {
                                 timestamp: string;
                                 logsCount: number;
                                 errorsCount: number;
+                                clientErrorsCount: number;
+                                gatewayErrorsCount: number;
+                                upstreamErrorsCount: number;
                                 cachedCount: number;
                                 avgTtft: number | null;
                                 avgDuration: number | null;
@@ -3211,12 +3220,153 @@ export interface paths {
                                 timestamp: string;
                                 logsCount: number;
                                 errorsCount: number;
+                                clientErrorsCount: number;
+                                gatewayErrorsCount: number;
+                                upstreamErrorsCount: number;
                                 cachedCount: number;
                                 avgTtft: number | null;
                                 avgDuration: number | null;
                                 totalTokens: number;
                                 totalCost: number;
                             }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/providers/{providerId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    window?: "1m" | "2m" | "5m" | "15m" | "1h" | "2h" | "4h" | "12h" | "24h" | "2d" | "7d";
+                };
+                header?: never;
+                path: {
+                    providerId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Provider detail with per-model stats. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            provider: {
+                                id: string;
+                                name: string;
+                                color: string | null;
+                                description: string;
+                                website: string | null;
+                                status: string;
+                                logsCount: number;
+                                errorsCount: number;
+                                clientErrorsCount: number;
+                                gatewayErrorsCount: number;
+                                upstreamErrorsCount: number;
+                                cachedCount: number;
+                                avgTimeToFirstToken: number | null;
+                                modelCount: number;
+                                updatedAt: string;
+                            };
+                            models: {
+                                modelId: string;
+                                modelName: string;
+                                mappingId: string;
+                                region: string | null;
+                                status: string;
+                                logsCount: number;
+                                errorsCount: number;
+                                clientErrorsCount: number;
+                                gatewayErrorsCount: number;
+                                upstreamErrorsCount: number;
+                                cachedCount: number;
+                                avgTimeToFirstToken: number | null;
+                                updatedAt: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/providers/{providerId}/models/{modelId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    window?: "1m" | "2m" | "5m" | "15m" | "1h" | "2h" | "4h" | "12h" | "24h" | "2d" | "7d";
+                };
+                header?: never;
+                path: {
+                    providerId: string;
+                    modelId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Mapping detail with aggregated stats for the window. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            mapping: {
+                                id: string;
+                                modelId: string;
+                                modelName: string;
+                                providerId: string;
+                                providerName: string;
+                                region: string | null;
+                                status: string;
+                                inputPrice: string | null;
+                                outputPrice: string | null;
+                                cachedInputPrice: string | null;
+                                imageInputPrice: string | null;
+                                requestPrice: string | null;
+                                contextSize: number | null;
+                                maxOutput: number | null;
+                                streaming: boolean;
+                                logsCount: number;
+                                errorsCount: number;
+                                clientErrorsCount: number;
+                                gatewayErrorsCount: number;
+                                upstreamErrorsCount: number;
+                                cachedCount: number;
+                                avgTimeToFirstToken: number | null;
+                                updatedAt: string;
+                            };
                         };
                     };
                 };
@@ -4143,6 +4293,194 @@ export interface paths {
                             totalCount: number;
                         };
                     };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/devpass": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    offset?: number | null;
+                    search?: string;
+                    tier?: "lite" | "pro" | "max" | "none";
+                    status?: "active" | "cancelled_pending" | "expired" | "churned";
+                    utilization?: "low" | "healthy" | "high" | "over";
+                    marginNegative?: boolean | null;
+                    showChurned?: boolean | null;
+                    sortBy?: "name" | "billingEmail" | "tier" | "createdAt" | "cycleStart" | "expiresAt" | "subscribedSince" | "utilizationPct" | "realCost" | "margin" | "mrr" | "creditsUsed";
+                    sortOrder?: "asc" | "desc";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description List of DevPass subscribers. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            subscribers: {
+                                id: string;
+                                name: string;
+                                billingEmail: string;
+                                ownerUserId: string | null;
+                                ownerName: string | null;
+                                ownerEmail: string | null;
+                                /** @enum {string} */
+                                tier: "lite" | "pro" | "max" | "none";
+                                /** @enum {string} */
+                                status: "active" | "cancelled_pending" | "expired" | "churned";
+                                hasPaymentIssue: boolean;
+                                creditsUsed: string;
+                                creditsLimit: string;
+                                utilizationPct: number | null;
+                                cycleStart: string | null;
+                                cycleDaysIn: number | null;
+                                expiresAt: string | null;
+                                cancelled: boolean;
+                                allowAllModels: boolean;
+                                mrr: number;
+                                realCost: number;
+                                margin: number;
+                                subscribedSince: string | null;
+                                tierChanges: number;
+                                lastPaymentFailureAt: string | null;
+                                createdAt: string;
+                            }[];
+                            total: number;
+                            kpis: {
+                                activeByTier: {
+                                    lite: number;
+                                    pro: number;
+                                    max: number;
+                                };
+                                totalActive: number;
+                                cancelledPending: number;
+                                churned: number;
+                                grossMrr: number;
+                                startsThisMonth: number;
+                                endsThisMonth: number;
+                                netNewThisMonth: number;
+                                weightedAvgUtilization: number;
+                                totalRealCostCycle: number;
+                                totalMrrCycle: number;
+                                totalMargin: number;
+                            };
+                            limit: number;
+                            offset: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/devpass/{orgId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    orgId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description DevPass subscriber detail. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            subscriber: {
+                                id: string;
+                                name: string;
+                                billingEmail: string;
+                                ownerUserId: string | null;
+                                ownerName: string | null;
+                                ownerEmail: string | null;
+                                /** @enum {string} */
+                                tier: "lite" | "pro" | "max" | "none";
+                                /** @enum {string} */
+                                status: "active" | "cancelled_pending" | "expired" | "churned";
+                                hasPaymentIssue: boolean;
+                                creditsUsed: string;
+                                creditsLimit: string;
+                                utilizationPct: number | null;
+                                cycleStart: string | null;
+                                cycleDaysIn: number | null;
+                                expiresAt: string | null;
+                                cancelled: boolean;
+                                allowAllModels: boolean;
+                                mrr: number;
+                                realCost: number;
+                                margin: number;
+                                subscribedSince: string | null;
+                                tierChanges: number;
+                                lastPaymentFailureAt: string | null;
+                                createdAt: string;
+                            };
+                            transactions: {
+                                id: string;
+                                createdAt: string;
+                                type: string;
+                                amount: string | null;
+                                creditAmount: string | null;
+                                currency: string;
+                                status: string;
+                                description: string | null;
+                            }[];
+                            paymentFailures: {
+                                id: string;
+                                createdAt: string;
+                                amount: string | null;
+                                currency: string;
+                                declineCode: string | null;
+                                failureMessage: string | null;
+                                source: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Subscriber not found. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };
@@ -8363,12 +8701,11 @@ export interface operations {
                             providerName: string;
                             logsCount: number;
                             errorsCount: number;
-                            clientErrorsCount: number;
-                            gatewayErrorsCount: number;
-                            upstreamErrorsCount: number;
                             cachedCount: number;
                             avgTimeToFirstToken: number | null;
                             errorRate: number;
+                            uptime: number | null;
+                            windowHours: number;
                         }[];
                         arena: {
                             text: {

@@ -1,3 +1,5 @@
+import { mapFinishReasonToOpenai } from "./map-finish-reason-to-openai.js";
+
 import type { RoutingAttempt } from "./retry-with-fallback.js";
 import type { Annotation, ImageObject } from "./types.js";
 import type { Provider } from "@llmgateway/models";
@@ -11,6 +13,92 @@ export interface CostData {
 	imageInputCost: number | null;
 	imageOutputCost: number | null;
 	totalCost: number | null;
+	dataStorageCost?: number | null;
+}
+
+export function applyExtendedUsageFields(
+	usage: Record<string, any>,
+	options: {
+		costs?: CostData | null;
+		cachedTokens?: number | null;
+		cacheCreationTokens?: number | null;
+		reasoningTokens?: number | null;
+	},
+): Record<string, any> {
+	const { costs, cachedTokens, cacheCreationTokens, reasoningTokens } = options;
+
+	if (costs) {
+		if (costs.totalCost !== null && costs.totalCost !== undefined) {
+			usage.cost = costs.totalCost;
+		}
+		const hasInferenceCosts =
+			costs.inputCost !== null ||
+			costs.cachedInputCost !== null ||
+			costs.outputCost !== null;
+		if (hasInferenceCosts) {
+			const inputCost = costs.inputCost ?? 0;
+			const cachedInputCost = costs.cachedInputCost ?? 0;
+			const outputCost = costs.outputCost ?? 0;
+			const promptCost = inputCost + cachedInputCost;
+			const completionsCost = outputCost;
+			// upstream_inference_cost intentionally excludes requestCost/webSearchCost, so usage.cost may be larger.
+			usage.cost_details = {
+				upstream_inference_cost: promptCost + completionsCost,
+				upstream_inference_prompt_cost: promptCost,
+				upstream_inference_completions_cost: completionsCost,
+				total_cost: costs.totalCost,
+				input_cost: costs.inputCost,
+				output_cost: costs.outputCost,
+				cached_input_cost: costs.cachedInputCost,
+				request_cost: costs.requestCost,
+				web_search_cost: costs.webSearchCost,
+				image_input_cost: costs.imageInputCost,
+				image_output_cost: costs.imageOutputCost,
+				...(costs.dataStorageCost !== null &&
+					costs.dataStorageCost !== undefined && {
+						data_storage_cost: costs.dataStorageCost,
+					}),
+			};
+		}
+	}
+
+	const existingPromptDetails =
+		(usage.prompt_tokens_details as Record<string, any> | undefined) ?? {};
+	const resolvedCacheRead =
+		existingPromptDetails.cached_tokens ?? cachedTokens ?? 0;
+	const resolvedCacheWrite =
+		existingPromptDetails.cache_write_tokens ??
+		existingPromptDetails.cache_creation_tokens ??
+		cacheCreationTokens ??
+		0;
+	usage.prompt_tokens_details = {
+		...existingPromptDetails,
+		cached_tokens: resolvedCacheRead,
+		cache_write_tokens: resolvedCacheWrite,
+		audio_tokens: existingPromptDetails.audio_tokens ?? 0,
+		video_tokens: existingPromptDetails.video_tokens ?? 0,
+		...(resolvedCacheWrite > 0 && {
+			cache_creation_tokens: resolvedCacheWrite,
+		}),
+	};
+
+	const existingCompletionDetails =
+		(usage.completion_tokens_details as Record<string, any> | undefined) ?? {};
+	const resolvedReasoning =
+		existingCompletionDetails.reasoning_tokens ??
+		(typeof usage.reasoning_tokens === "number"
+			? usage.reasoning_tokens
+			: undefined) ??
+		reasoningTokens ??
+		0;
+	usage.completion_tokens_details = {
+		...existingCompletionDetails,
+		reasoning_tokens: resolvedReasoning,
+		image_tokens: existingCompletionDetails.image_tokens ?? 0,
+		audio_tokens: existingCompletionDetails.audio_tokens ?? 0,
+	};
+
+	return usage;
 }
 
 function buildMetadata(
@@ -109,10 +197,7 @@ function buildUsageObject(
 	showUpgradeMessage = false,
 	cacheCreationTokens: number | null = null,
 ) {
-	const hasCacheRead = cachedTokens !== null;
-	const hasCacheCreation =
-		cacheCreationTokens !== null && cacheCreationTokens > 0;
-	return {
+	const usage: Record<string, any> = {
 		prompt_tokens: Math.max(1, promptTokens ?? 1),
 		completion_tokens: completionTokens ?? 0,
 		total_tokens: (() => {
@@ -123,28 +208,19 @@ function buildUsageObject(
 		...(reasoningTokens !== null && {
 			reasoning_tokens: reasoningTokens,
 		}),
-		...((hasCacheRead || hasCacheCreation) && {
-			prompt_tokens_details: {
-				cached_tokens: cachedTokens ?? 0,
-				...(hasCacheCreation && {
-					cache_creation_tokens: cacheCreationTokens,
-				}),
-			},
-		}),
-		...(costs !== null && {
-			cost_usd_total: costs.totalCost,
-			cost_usd_input: costs.inputCost,
-			cost_usd_output: costs.outputCost,
-			cost_usd_cached_input: costs.cachedInputCost,
-			cost_usd_request: costs.requestCost,
-			cost_usd_web_search: costs.webSearchCost,
-			cost_usd_image_input: costs.imageInputCost,
-			cost_usd_image_output: costs.imageOutputCost,
-		}),
 		...(showUpgradeMessage && {
 			info: "upgrade to pro to include usd cost breakdown",
 		}),
 	};
+
+	applyExtendedUsageFields(usage, {
+		costs,
+		cachedTokens,
+		cacheCreationTokens,
+		reasoningTokens,
+	});
+
+	return usage;
 }
 
 /**
@@ -181,8 +257,7 @@ export function transformResponseToOpenai(
 		case "google-ai-studio":
 		case "glacier":
 		case "google-vertex":
-		case "quartz":
-		case "obsidian": {
+		case "quartz": {
 			transformedResponse = {
 				id: `chatcmpl-${Date.now()}`,
 				object: "chat.completion",
@@ -201,28 +276,11 @@ export function transformResponseToOpenai(
 							...(images && images.length > 0 && { images }),
 							...(annotations && annotations.length > 0 && { annotations }),
 						},
-						finish_reason: (() => {
-							// Map Google finish reasons to OpenAI format for the response
-							if (!finishReason) {
-								return "stop";
-							}
-							if (finishReason === "STOP") {
-								return toolResults ? "tool_calls" : "stop";
-							}
-							if (finishReason === "MAX_TOKENS") {
-								return "length";
-							}
-							if (
-								finishReason === "SAFETY" ||
-								finishReason === "PROHIBITED_CONTENT" ||
-								finishReason === "RECITATION" ||
-								finishReason === "BLOCKLIST" ||
-								finishReason === "SPII"
-							) {
-								return "content_filter";
-							}
-							return "stop";
-						})(),
+						finish_reason: mapFinishReasonToOpenai(
+							finishReason,
+							usedProvider,
+							!!toolResults,
+						),
 					},
 				],
 				usage: buildUsageObject(
@@ -266,14 +324,11 @@ export function transformResponseToOpenai(
 							...(toolResults && { tool_calls: toolResults }),
 							...(annotations && annotations.length > 0 && { annotations }),
 						},
-						finish_reason:
-							finishReason === "end_turn"
-								? "stop"
-								: finishReason === "tool_use"
-									? "tool_calls"
-									: finishReason === "max_tokens"
-										? "length"
-										: "stop",
+						finish_reason: mapFinishReasonToOpenai(
+							finishReason,
+							usedProvider,
+							!!toolResults,
+						),
 					},
 				],
 				usage: buildUsageObject(
@@ -300,7 +355,7 @@ export function transformResponseToOpenai(
 			break;
 		}
 		case "inference.net":
-		case "together.ai":
+		case "together-ai":
 		case "groq": {
 			if (!transformedResponse.id) {
 				transformedResponse = {
@@ -373,24 +428,18 @@ export function transformResponseToOpenai(
 					usedRegion,
 				);
 				if (transformedResponse.usage) {
-					if (costs !== null) {
-						transformedResponse.usage = {
-							...transformedResponse.usage,
-							cost_usd_total: costs.totalCost,
-							cost_usd_input: costs.inputCost,
-							cost_usd_output: costs.outputCost,
-							cost_usd_cached_input: costs.cachedInputCost,
-							cost_usd_request: costs.requestCost,
-							cost_usd_image_input: costs.imageInputCost,
-							cost_usd_image_output: costs.imageOutputCost,
-						};
-					}
 					if (showUpgradeMessage) {
 						transformedResponse.usage = {
 							...transformedResponse.usage,
 							info: "upgrade to pro to include usd cost breakdown",
 						};
 					}
+					applyExtendedUsageFields(transformedResponse.usage, {
+						costs,
+						cachedTokens,
+						cacheCreationTokens,
+						reasoningTokens,
+					});
 				}
 			}
 			break;
@@ -508,24 +557,18 @@ export function transformResponseToOpenai(
 						usedRegion,
 					);
 					if (transformedResponse.usage) {
-						if (costs !== null) {
-							transformedResponse.usage = {
-								...transformedResponse.usage,
-								cost_usd_total: costs.totalCost,
-								cost_usd_input: costs.inputCost,
-								cost_usd_output: costs.outputCost,
-								cost_usd_cached_input: costs.cachedInputCost,
-								cost_usd_request: costs.requestCost,
-								cost_usd_image_input: costs.imageInputCost,
-								cost_usd_image_output: costs.imageOutputCost,
-							};
-						}
 						if (showUpgradeMessage) {
 							transformedResponse.usage = {
 								...transformedResponse.usage,
 								info: "upgrade to pro to include usd cost breakdown",
 							};
 						}
+						applyExtendedUsageFields(transformedResponse.usage, {
+							costs,
+							cachedTokens,
+							cacheCreationTokens,
+							reasoningTokens,
+						});
 					}
 				}
 			}
@@ -535,6 +578,54 @@ export function transformResponseToOpenai(
 		case "mistral":
 		case "novita":
 		case "openai": {
+			// Handle OpenAI image generation responses (e.g. gpt-image-2)
+			// Format: { created: number, data: [{ b64_json?: string, url?: string }], usage?: {...} }
+			if (
+				usedProvider === "openai" &&
+				json.data &&
+				Array.isArray(json.data) &&
+				!json.choices &&
+				!json.output
+			) {
+				transformedResponse = {
+					id: `chatcmpl-${Date.now()}`,
+					object: "chat.completion",
+					created: json.created ?? Math.floor(Date.now() / 1000),
+					model: `${usedProvider}/${baseModelName}`,
+					choices: [
+						{
+							index: 0,
+							message: {
+								role: "assistant",
+								content: content,
+								...(images && images.length > 0 && { images }),
+							},
+							finish_reason: finishReason ?? "stop",
+						},
+					],
+					usage: buildUsageObject(
+						promptTokens,
+						completionTokens,
+						totalTokens,
+						reasoningTokens,
+						cachedTokens,
+						costs,
+						showUpgradeMessage,
+						cacheCreationTokens,
+					),
+					metadata: buildMetadata(
+						requestedModel,
+						requestedProvider,
+						baseModelName,
+						usedProvider,
+						usedModel,
+						requestId,
+						routing,
+						usedRegion,
+					),
+				};
+				break;
+			}
 			// Handle OpenAI responses format transformation to chat completions format
 			if (json.output && Array.isArray(json.output)) {
 				// This is from the responses endpoint - transform to chat completions format
@@ -615,24 +706,18 @@ export function transformResponseToOpenai(
 						usedRegion,
 					);
 					if (transformedResponse.usage) {
-						if (costs !== null) {
-							transformedResponse.usage = {
-								...transformedResponse.usage,
-								cost_usd_total: costs.totalCost,
-								cost_usd_input: costs.inputCost,
-								cost_usd_output: costs.outputCost,
-								cost_usd_cached_input: costs.cachedInputCost,
-								cost_usd_request: costs.requestCost,
-								cost_usd_image_input: costs.imageInputCost,
-								cost_usd_image_output: costs.imageOutputCost,
-							};
-						}
 						if (showUpgradeMessage) {
 							transformedResponse.usage = {
 								...transformedResponse.usage,
 								info: "upgrade to pro to include usd cost breakdown",
 							};
 						}
+						applyExtendedUsageFields(transformedResponse.usage, {
+							costs,
+							cachedTokens,
+							cacheCreationTokens,
+							reasoningTokens,
+						});
 					}
 				}
 			}
@@ -706,24 +791,18 @@ export function transformResponseToOpenai(
 						usedRegion,
 					);
 					if (transformedResponse.usage) {
-						if (costs !== null) {
-							transformedResponse.usage = {
-								...transformedResponse.usage,
-								cost_usd_total: costs.totalCost,
-								cost_usd_input: costs.inputCost,
-								cost_usd_output: costs.outputCost,
-								cost_usd_cached_input: costs.cachedInputCost,
-								cost_usd_request: costs.requestCost,
-								cost_usd_image_input: costs.imageInputCost,
-								cost_usd_image_output: costs.imageOutputCost,
-							};
-						}
 						if (showUpgradeMessage) {
 							transformedResponse.usage = {
 								...transformedResponse.usage,
 								info: "upgrade to pro to include usd cost breakdown",
 							};
 						}
+						applyExtendedUsageFields(transformedResponse.usage, {
+							costs,
+							cachedTokens,
+							cacheCreationTokens,
+							reasoningTokens,
+						});
 					}
 				}
 			}
@@ -797,24 +876,18 @@ export function transformResponseToOpenai(
 						usedRegion,
 					);
 					if (transformedResponse.usage) {
-						if (costs !== null) {
-							transformedResponse.usage = {
-								...transformedResponse.usage,
-								cost_usd_total: costs.totalCost,
-								cost_usd_input: costs.inputCost,
-								cost_usd_output: costs.outputCost,
-								cost_usd_cached_input: costs.cachedInputCost,
-								cost_usd_request: costs.requestCost,
-								cost_usd_image_input: costs.imageInputCost,
-								cost_usd_image_output: costs.imageOutputCost,
-							};
-						}
 						if (showUpgradeMessage) {
 							transformedResponse.usage = {
 								...transformedResponse.usage,
 								info: "upgrade to pro to include usd cost breakdown",
 							};
 						}
+						applyExtendedUsageFields(transformedResponse.usage, {
+							costs,
+							cachedTokens,
+							cacheCreationTokens,
+							reasoningTokens,
+						});
 					}
 				}
 			}
@@ -889,24 +962,18 @@ export function transformResponseToOpenai(
 						usedRegion,
 					);
 					if (transformedResponse.usage) {
-						if (costs !== null) {
-							transformedResponse.usage = {
-								...transformedResponse.usage,
-								cost_usd_total: costs.totalCost,
-								cost_usd_input: costs.inputCost,
-								cost_usd_output: costs.outputCost,
-								cost_usd_cached_input: costs.cachedInputCost,
-								cost_usd_request: costs.requestCost,
-								cost_usd_image_input: costs.imageInputCost,
-								cost_usd_image_output: costs.imageOutputCost,
-							};
-						}
 						if (showUpgradeMessage) {
 							transformedResponse.usage = {
 								...transformedResponse.usage,
 								info: "upgrade to pro to include usd cost breakdown",
 							};
 						}
+						applyExtendedUsageFields(transformedResponse.usage, {
+							costs,
+							cachedTokens,
+							cacheCreationTokens,
+							reasoningTokens,
+						});
 					}
 				}
 			}
@@ -944,24 +1011,18 @@ export function transformResponseToOpenai(
 					usedRegion,
 				);
 				if (transformedResponse.usage) {
-					if (costs !== null) {
-						transformedResponse.usage = {
-							...transformedResponse.usage,
-							cost_usd_total: costs.totalCost,
-							cost_usd_input: costs.inputCost,
-							cost_usd_output: costs.outputCost,
-							cost_usd_cached_input: costs.cachedInputCost,
-							cost_usd_request: costs.requestCost,
-							cost_usd_image_input: costs.imageInputCost,
-							cost_usd_image_output: costs.imageOutputCost,
-						};
-					}
 					if (showUpgradeMessage) {
 						transformedResponse.usage = {
 							...transformedResponse.usage,
 							info: "upgrade to pro to include usd cost breakdown",
 						};
 					}
+					applyExtendedUsageFields(transformedResponse.usage, {
+						costs,
+						cachedTokens,
+						cacheCreationTokens,
+						reasoningTokens,
+					});
 				}
 			}
 			break;

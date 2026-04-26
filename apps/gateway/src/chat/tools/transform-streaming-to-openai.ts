@@ -4,6 +4,7 @@ import { logger } from "@llmgateway/logger";
 import { calculatePromptTokensFromMessages } from "./calculate-prompt-tokens.js";
 import { extractImages } from "./extract-images.js";
 import { adjustGoogleCandidateTokens } from "./extract-token-usage.js";
+import { mapFinishReasonToOpenai } from "./map-finish-reason-to-openai.js";
 import { transformOpenaiStreaming } from "./transform-openai-streaming.js";
 
 import type { Annotation, StreamingDelta } from "./types.js";
@@ -262,14 +263,7 @@ export function transformStreamingToOpenai(
 							delta: {
 								role: "assistant",
 							},
-							finish_reason:
-								stopReason === "end_turn"
-									? "stop"
-									: stopReason === "tool_use"
-										? "tool_calls"
-										: stopReason === "max_tokens"
-											? "length"
-											: "stop",
+							finish_reason: mapFinishReasonToOpenai(stopReason, usedProvider),
 						},
 					],
 					usage: normalizeAnthropicUsage(data.usage),
@@ -287,14 +281,7 @@ export function transformStreamingToOpenai(
 							delta: {
 								role: "assistant",
 							},
-							finish_reason:
-								stopReason === "end_turn"
-									? "stop"
-									: stopReason === "tool_use"
-										? "tool_calls"
-										: stopReason === "max_tokens"
-											? "length"
-											: "stop",
+							finish_reason: mapFinishReasonToOpenai(stopReason, usedProvider),
 						},
 					],
 					usage: normalizeAnthropicUsage(data.usage),
@@ -317,6 +304,8 @@ export function transformStreamingToOpenai(
 					],
 					usage: normalizeAnthropicUsage(data.usage),
 				};
+			} else if (data.type === "ping") {
+				return null;
 			} else {
 				logger.warn("[streaming] Unrecognized Anthropic chunk", {
 					provider: usedProvider,
@@ -348,52 +337,7 @@ export function transformStreamingToOpenai(
 		case "google-ai-studio":
 		case "glacier":
 		case "google-vertex":
-		case "quartz":
-		case "obsidian": {
-			const mapFinishReason = (
-				finishReason?: string,
-				hasFunctionCalls?: boolean,
-				promptBlockReason?: string,
-			): string => {
-				if (promptBlockReason) {
-					switch (promptBlockReason) {
-						case "SAFETY":
-						case "PROHIBITED_CONTENT":
-						case "BLOCKLIST":
-						case "OTHER":
-							return "content_filter";
-						default:
-							return "stop";
-					}
-				}
-
-				if (!finishReason) {
-					return hasFunctionCalls ? "tool_calls" : "stop";
-				}
-
-				switch (finishReason) {
-					case "STOP":
-						return hasFunctionCalls ? "tool_calls" : "stop";
-					case "MAX_TOKENS":
-						return "length";
-					case "MALFORMED_FUNCTION_CALL":
-					case "UNEXPECTED_TOOL_CALL":
-						return "tool_calls";
-					case "SAFETY":
-					case "PROHIBITED_CONTENT":
-					case "RECITATION":
-					case "BLOCKLIST":
-					case "SPII":
-					case "LANGUAGE":
-					case "IMAGE_SAFETY":
-					case "IMAGE_PROHIBITED_CONTENT":
-					case "NO_IMAGE":
-						return "content_filter";
-					default:
-						return "stop";
-				}
-			};
-
+		case "quartz": {
 			const buildUsage = (
 				usageMetadata: any | undefined,
 				messagesForFallback: any[],
@@ -673,8 +617,9 @@ export function transformStreamingToOpenai(
 										? candidate.index
 										: candidateIdx,
 								delta: { role: "assistant" },
-								finish_reason: mapFinishReason(
+								finish_reason: mapFinishReasonToOpenai(
 									finishReason,
+									usedProvider,
 									candidateHasFunctionCalls,
 									promptBlockReason,
 								),
@@ -684,8 +629,9 @@ export function transformStreamingToOpenai(
 							{
 								index: 0,
 								delta: { role: "assistant" },
-								finish_reason: mapFinishReason(
+								finish_reason: mapFinishReasonToOpenai(
 									firstCandidate?.finishReason,
+									usedProvider,
 									false,
 									promptBlockReason,
 								),
@@ -1266,13 +1212,14 @@ export function transformStreamingToOpenai(
 		case "cerebras":
 		case "xai":
 		case "deepseek":
+		case "bluestone":
 		case "alibaba":
 		case "moonshot":
 		case "perplexity":
 		case "nebius":
 		case "canopywave":
 		case "inference.net":
-		case "together.ai":
+		case "together-ai":
 		case "custom":
 		case "nanogpt":
 		case "bytedance":

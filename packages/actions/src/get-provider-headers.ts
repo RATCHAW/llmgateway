@@ -39,7 +39,6 @@ export function getProviderHeaders(
 		case "google-vertex":
 		case "quartz":
 			return requestIdHeader;
-		case "obsidian":
 		case "avalanche":
 			return {
 				...requestIdHeader,
@@ -61,6 +60,7 @@ export function getProviderHeaders(
 		case "xai":
 		case "groq":
 		case "deepseek":
+		case "bluestone":
 		case "perplexity":
 		case "novita":
 		case "moonshot":

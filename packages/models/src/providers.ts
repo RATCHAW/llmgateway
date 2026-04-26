@@ -181,23 +181,6 @@ export const providers = [
 		priority: 0.9,
 	},
 	{
-		id: "obsidian",
-		name: "Obsidian",
-		description: "Obsidian - Google-compatible LLM provider.",
-		env: {
-			required: {
-				apiKey: "LLM_OBSIDIAN_API_KEY",
-				baseUrl: "LLM_OBSIDIAN_BASE_URL",
-			},
-		},
-		streaming: true,
-		cancellation: true,
-		color: "#1a1a1a",
-		website: null,
-		announcement: null,
-		contentFilter: true,
-	},
-	{
 		id: "avalanche",
 		name: "Avalanche",
 		description: "Avalanche - video generation provider.",
@@ -276,6 +259,22 @@ export const providers = [
 		cancellation: true,
 		color: "#FF6B00",
 		website: "https://deepseek.com",
+		announcement: null,
+	},
+	{
+		id: "bluestone",
+		name: "Bluestone",
+		description: "Bluestone's OpenAI-compatible LLM inference API",
+		env: {
+			required: {
+				apiKey: "LLM_BLUESTONE_API_KEY",
+				baseUrl: "LLM_BLUESTONE_BASE_URL",
+			},
+		},
+		streaming: true,
+		cancellation: true,
+		color: "#0284c7",
+		website: null,
 		announcement: null,
 	},
 	{
@@ -484,7 +483,7 @@ export const providers = [
 		announcement: null,
 	},
 	{
-		id: "together.ai",
+		id: "together-ai",
 		name: "Together AI",
 		description:
 			"Together AI is a platform for running large language models in the cloud with fast inference.",

@@ -30,17 +30,31 @@ interface ChatCompletionsResponse {
 		total_tokens?: number;
 		prompt_tokens_details?: {
 			cached_tokens?: number;
+			cache_write_tokens?: number;
+			cache_creation_tokens?: number;
+			audio_tokens?: number;
+			video_tokens?: number;
 		};
 		completion_tokens_details?: {
 			reasoning_tokens?: number;
+			image_tokens?: number;
+			audio_tokens?: number;
 		};
-		cost_usd_total?: number;
-		cost_usd_input?: number;
-		cost_usd_output?: number;
-		cost_usd_cached_input?: number;
-		cost_usd_request?: number;
-		cost_usd_image_input?: number | null;
-		cost_usd_image_output?: number | null;
+		cost?: number;
+		cost_details?: {
+			upstream_inference_cost: number;
+			upstream_inference_prompt_cost: number;
+			upstream_inference_completions_cost: number;
+			total_cost?: number | null;
+			input_cost?: number | null;
+			output_cost?: number | null;
+			cached_input_cost?: number | null;
+			request_cost?: number | null;
+			web_search_cost?: number | null;
+			image_input_cost?: number | null;
+			image_output_cost?: number | null;
+			data_storage_cost?: number | null;
+		};
 	};
 	metadata?: Record<string, unknown>;
 }
@@ -67,11 +81,21 @@ export interface ResponsesApiResponse {
 		input_tokens_details?: {
 			cached_tokens: number;
 		};
-		cost_usd_total?: number;
-		cost_usd_input?: number;
-		cost_usd_output?: number;
-		cost_usd_cached_input?: number;
-		cost_usd_request?: number;
+		cost?: number;
+		cost_details?: {
+			upstream_inference_cost: number;
+			upstream_inference_prompt_cost: number;
+			upstream_inference_completions_cost: number;
+			total_cost?: number | null;
+			input_cost?: number | null;
+			output_cost?: number | null;
+			cached_input_cost?: number | null;
+			request_cost?: number | null;
+			web_search_cost?: number | null;
+			image_input_cost?: number | null;
+			image_output_cost?: number | null;
+			data_storage_cost?: number | null;
+		};
 	};
 	status: "completed" | "incomplete" | "failed";
 	metadata?: Record<string, unknown>;
@@ -156,21 +180,11 @@ export function convertChatResponseToResponses(
 		};
 	}
 
-	// Pass through cost fields
-	if (chatResponse.usage?.cost_usd_total !== undefined) {
-		usage.cost_usd_total = chatResponse.usage.cost_usd_total;
+	if (chatResponse.usage?.cost !== undefined) {
+		usage.cost = chatResponse.usage.cost;
 	}
-	if (chatResponse.usage?.cost_usd_input !== undefined) {
-		usage.cost_usd_input = chatResponse.usage.cost_usd_input;
-	}
-	if (chatResponse.usage?.cost_usd_output !== undefined) {
-		usage.cost_usd_output = chatResponse.usage.cost_usd_output;
-	}
-	if (chatResponse.usage?.cost_usd_cached_input !== undefined) {
-		usage.cost_usd_cached_input = chatResponse.usage.cost_usd_cached_input;
-	}
-	if (chatResponse.usage?.cost_usd_request !== undefined) {
-		usage.cost_usd_request = chatResponse.usage.cost_usd_request;
+	if (chatResponse.usage?.cost_details !== undefined) {
+		usage.cost_details = chatResponse.usage.cost_details;
 	}
 
 	return {

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "apps/gateway/**"
+      - "packages/actions/**"
       - "packages/models/**"
       - "packages/shared/**"
       - "**/*.e2e.ts"
@@ -32,7 +33,7 @@ jobs:
           echo "nodejs_version=$(cat .tool-versions | grep 'nodejs' | cut -d ' ' -f 2)" >> "$GITHUB_ENV"
           echo "pnpm_version=$(cat .tool-versions | grep 'pnpm' | cut -d ' ' -f 2)" >> "$GITHUB_ENV"
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6.0.3
         with:
           version: ${{ env.pnpm_version }}
 
@@ -108,7 +109,7 @@ jobs:
           echo "nodejs_version=$(cat .tool-versions | grep 'nodejs' | cut -d ' ' -f 2)" >> "$GITHUB_ENV"
           echo "pnpm_version=$(cat .tool-versions | grep 'pnpm' | cut -d ' ' -f 2)" >> "$GITHUB_ENV"
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6.0.3
         with:
           version: ${{ env.pnpm_version }}
 

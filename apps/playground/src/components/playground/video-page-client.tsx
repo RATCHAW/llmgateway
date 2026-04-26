@@ -69,10 +69,18 @@ export default function VideoPageClient({
 	const router = useRouter();
 	const searchParams = useSearchParams();
 
-	const videoGenModels = useMemo(
-		() => models.filter((m) => m.output?.includes("video")),
-		[models],
-	);
+	const videoGenModels = useMemo(() => {
+		const now = new Date();
+		return models.filter((m) => {
+			if (!m.output?.includes("video")) {
+				return false;
+			}
+			return m.mappings.some(
+				(mapping) =>
+					!mapping.deactivatedAt || new Date(mapping.deactivatedAt) > now,
+			);
+		});
+	}, [models]);
 
 	const mapped = useMemo(
 		() => mapModels(videoGenModels, providers),

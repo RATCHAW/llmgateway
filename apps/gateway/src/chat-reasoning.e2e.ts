@@ -116,6 +116,13 @@ describe("e2e", getConcurrentTestOptions(), () => {
 		"reasoning max_tokens budget $model",
 		getTestOptions(),
 		async ({ model, providers }) => {
+			const reasoningProvider = providers?.find(
+				(p: ProviderModelMapping) => p.reasoningMaxTokens === true,
+			) as ProviderModelMapping;
+			const shouldCheckReasoning =
+				reasoningProvider?.reasoningOutput !== "omit";
+
+			const budget = 1024;
 			const requestId = generateTestRequestId();
 			const res = await app.request("/v1/chat/completions", {
 				method: "POST",
@@ -123,10 +130,13 @@ describe("e2e", getConcurrentTestOptions(), () => {
 					"Content-Type": "application/json",
 					"x-request-id": requestId,
 					"x-no-fallback": "true",
+					// Capture the upstream request body in the log so we can
+					// assert the budget actually reached the provider.
+					"x-debug": "true",
 					Authorization: `Bearer real-token`,
 				},
 				body: JSON.stringify({
-					model: model,
+					model,
 					messages: [
 						{
 							role: "system",
@@ -137,7 +147,7 @@ describe("e2e", getConcurrentTestOptions(), () => {
 							content: "What is 2/3 + 1/4 + 5/6?",
 						},
 					],
-					reasoning: { max_tokens: 1024 },
+					reasoning: { max_tokens: budget },
 				}),
 			});
 
@@ -154,12 +164,7 @@ describe("e2e", getConcurrentTestOptions(), () => {
 
 			const log = await validateLogByRequestId(requestId);
 			expect(log.streamed).toBe(false);
-
-			const reasoningProvider = providers?.find(
-				(p: ProviderModelMapping) => p.reasoningMaxTokens === true,
-			) as ProviderModelMapping;
-			const shouldCheckReasoning =
-				reasoningProvider?.reasoningOutput !== "omit";
+			expect(log.reasoningMaxTokens).toBe(budget);
 
 			if (shouldCheckReasoning) {
 				expect(log.reasoningContent).toBeTruthy();
@@ -188,6 +193,37 @@ describe("e2e", getConcurrentTestOptions(), () => {
 
 			if (shouldCheckReasoning) {
 				expect(json.choices[0].message).toHaveProperty("reasoning");
+			}
+
+			// Core check: the budget must actually reach the provider in the
+			// expected provider-specific field. Without this assertion, the
+			// test would pass even if the gateway silently dropped or rewrote
+			// reasoning.max_tokens.
+			expect(log.upstreamRequest).toBeTruthy();
+			const upstream = log.upstreamRequest as Record<string, any>;
+			switch (reasoningProvider.providerId) {
+				case "anthropic":
+					expect(upstream?.thinking?.type).toBe("enabled");
+					expect(upstream?.thinking?.budget_tokens).toBe(budget);
+					break;
+				case "aws-bedrock":
+					expect(upstream?.additionalModelRequestFields?.thinking?.type).toBe(
+						"enabled",
+					);
+					expect(
+						upstream?.additionalModelRequestFields?.thinking?.budget_tokens,
+					).toBe(budget);
+					break;
+				case "google-vertex":
+				case "google-ai-studio":
+					expect(
+						upstream?.generationConfig?.thinkingConfig?.thinkingBudget,
+					).toBe(budget);
+					break;
+				default:
+					throw new Error(
+						`reasoning.max_tokens forwarding not asserted for provider ${reasoningProvider.providerId}; add a case here.`,
+					);
 			}
 		},
 	);

@@ -679,10 +679,17 @@ export function transformStreamingToOpenai(
 
 		case "azure":
 		case "openai": {
+			// Azure precedes every stream with a prompt-filter-only chunk that has
+			// empty id/object/model and no choices. The default OpenAI fallback
+			// path passes the empty values through and breaks downstream
+			// hasOpenAIFormat checks. Drop it — if any prompt filter actually
+			// fires, Azure surfaces it via a content_filter error/finish_reason.
 			if (
 				usedProvider === "azure" &&
-				Array.isArray(data.prompt_filter_results) &&
-				(!data.choices || data.choices.length === 0)
+				!data.id &&
+				!data.object &&
+				(!data.choices || data.choices.length === 0) &&
+				!data.usage
 			) {
 				transformedData = null;
 				break;

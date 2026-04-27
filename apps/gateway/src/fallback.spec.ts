@@ -2321,7 +2321,7 @@ describe("fallback and error status code handling", () => {
 		});
 
 		test("non-streaming: retries another key for auth failures on the same explicit provider", async () => {
-			await setupSingleProviderWithMultipleKeys("together.ai");
+			await setupSingleProviderWithMultipleKeys("together-ai");
 
 			const res = await app.request("/v1/chat/completions", {
 				method: "POST",
@@ -2330,7 +2330,7 @@ describe("fallback and error status code handling", () => {
 					Authorization: "Bearer real-token",
 				},
 				body: JSON.stringify({
-					model: "together.ai/glm-4.7",
+					model: "together-ai/glm-4.7",
 					messages: [{ role: "user", content: "TRIGGER_STATUS_401" }],
 				}),
 			});
@@ -2345,16 +2345,16 @@ describe("fallback and error status code handling", () => {
 			);
 			expect(authLogs).toHaveLength(2);
 			expect(authLogs.some((log: Log) => log.retried)).toBe(true);
-			expect(isTrackedKeyHealthy("together.ai-key-primary", "glm-4.7")).toBe(
+			expect(isTrackedKeyHealthy("together-ai-key-primary", "glm-4.7")).toBe(
 				false,
 			);
-			expect(isTrackedKeyHealthy("together.ai-key-secondary", "glm-4.7")).toBe(
+			expect(isTrackedKeyHealthy("together-ai-key-secondary", "glm-4.7")).toBe(
 				false,
 			);
 		});
 
 		test("non-streaming: retries another key for invalid API key payloads", async () => {
-			await setupSingleProviderWithMultipleKeys("together.ai");
+			await setupSingleProviderWithMultipleKeys("together-ai");
 
 			const res = await app.request("/v1/chat/completions", {
 				method: "POST",
@@ -2363,7 +2363,7 @@ describe("fallback and error status code handling", () => {
 					Authorization: "Bearer real-token",
 				},
 				body: JSON.stringify({
-					model: "together.ai/glm-4.7",
+					model: "together-ai/glm-4.7",
 					messages: [
 						{ role: "user", content: "TRIGGER_FAIL_ONCE_INVALID_KEY" },
 					],
@@ -2374,12 +2374,12 @@ describe("fallback and error status code handling", () => {
 			const json = await res.json();
 			expect(json.metadata.routing).toHaveLength(2);
 			expect(json.metadata.routing[0]).toMatchObject({
-				provider: "together.ai",
+				provider: "together-ai",
 				status_code: 400,
 				succeeded: false,
 			});
 			expect(json.metadata.routing[1]).toMatchObject({
-				provider: "together.ai",
+				provider: "together-ai",
 				succeeded: true,
 			});
 
@@ -2393,10 +2393,10 @@ describe("fallback and error status code handling", () => {
 			expect(failedLog?.finishReason).toBe("gateway_error");
 			expect(failedLog?.retried).toBe(true);
 			expect(successLog?.routingMetadata?.routing).toHaveLength(2);
-			expect(isTrackedKeyHealthy("together.ai-key-primary", "glm-4.7")).toBe(
+			expect(isTrackedKeyHealthy("together-ai-key-primary", "glm-4.7")).toBe(
 				false,
 			);
-			expect(isTrackedKeyHealthy("together.ai-key-secondary", "glm-4.7")).toBe(
+			expect(isTrackedKeyHealthy("together-ai-key-secondary", "glm-4.7")).toBe(
 				true,
 			);
 		});

@@ -679,6 +679,14 @@ export function transformStreamingToOpenai(
 
 		case "azure":
 		case "openai": {
+			if (
+				usedProvider === "azure" &&
+				Array.isArray(data.prompt_filter_results) &&
+				(!data.choices || data.choices.length === 0)
+			) {
+				transformedData = null;
+				break;
+			}
 			if (data.type) {
 				switch (data.type) {
 					case "keepalive":

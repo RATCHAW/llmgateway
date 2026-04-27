@@ -723,6 +723,7 @@ export const openaiModels = [
 			},
 			{
 				providerId: "azure",
+				stability: "unstable",
 				modelName: "gpt-oss-120b",
 				inputPrice: 0.15 / 1e6,
 				outputPrice: 0.6 / 1e6,

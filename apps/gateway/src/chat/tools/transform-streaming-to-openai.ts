@@ -304,6 +304,8 @@ export function transformStreamingToOpenai(
 					],
 					usage: normalizeAnthropicUsage(data.usage),
 				};
+			} else if (data.type === "ping") {
+				return null;
 			} else {
 				logger.warn("[streaming] Unrecognized Anthropic chunk", {
 					provider: usedProvider,
@@ -1210,13 +1212,14 @@ export function transformStreamingToOpenai(
 		case "cerebras":
 		case "xai":
 		case "deepseek":
+		case "bluestone":
 		case "alibaba":
 		case "moonshot":
 		case "perplexity":
 		case "nebius":
 		case "canopywave":
 		case "inference.net":
-		case "together.ai":
+		case "together-ai":
 		case "custom":
 		case "nanogpt":
 		case "bytedance":

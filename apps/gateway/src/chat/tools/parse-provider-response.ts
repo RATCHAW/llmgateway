@@ -526,6 +526,39 @@ export function parseProviderResponse(
 			break;
 		}
 		default: // OpenAI format
+			// Check if this is an OpenAI image generation response (e.g. gpt-image-2)
+			// Format: { created: number, data: [{ b64_json?: string, url?: string, revised_prompt?: string }], usage?: {...} }
+			if (
+				usedProvider === "openai" &&
+				json.data &&
+				Array.isArray(json.data) &&
+				json.data.length > 0 &&
+				(json.data[0]?.b64_json || json.data[0]?.url)
+			) {
+				const imageData = json.data;
+				images = imageData.map((item: any): ImageObject => {
+					let url: string;
+					if (item.b64_json) {
+						url = `data:image/png;base64,${item.b64_json}`;
+					} else {
+						url = item.url;
+					}
+					return {
+						type: "image_url",
+						image_url: { url },
+					};
+				});
+				content = imageLabel;
+				finishReason = "stop";
+				// OpenAI gpt-image models return usage with input/output tokens
+				promptTokens = json.usage?.input_tokens ?? 0;
+				completionTokens = json.usage?.output_tokens ?? 0;
+				cachedTokens = json.usage?.input_tokens_details?.cached_tokens ?? null;
+				totalTokens =
+					json.usage?.total_tokens ??
+					(promptTokens ?? 0) + (completionTokens ?? 0);
+				break;
+			}
 			// Check if this is an xAI Grok Imagine image generation response
 			// Format: { data: [{ url: "..." }] }
 			if (usedProvider === "xai" && json.data && Array.isArray(json.data)) {
@@ -799,31 +832,6 @@ export function parseProviderResponse(
 		if (splitContent.reasoningContent) {
 			content = splitContent.content;
 			reasoningContent ??= splitContent.reasoningContent;
-		}
-	}
-
-	// Cache reasoning_content for Moonshot thinking models when tool_calls are present
-	// This is needed for multi-turn tool call conversations because Moonshot requires
-	// reasoning_content to be included in assistant messages with tool_calls
-	if (
-		usedProvider === "moonshot" &&
-		reasoningContent &&
-		toolResults &&
-		Array.isArray(toolResults) &&
-		toolResults.length > 0
-	) {
-		for (const toolCall of toolResults) {
-			if (toolCall.id) {
-				redisClient
-					.setex(
-						`reasoning_content:${toolCall.id}`,
-						86400, // 1 day expiration
-						reasoningContent,
-					)
-					.catch((err) => {
-						logger.error("Failed to cache reasoning_content", { err });
-					});
-			}
 		}
 	}
 

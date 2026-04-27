@@ -201,7 +201,7 @@ describe("fallback and error status code handling", () => {
 			{
 				id: "provider-key-together",
 				token: "sk-together-key",
-				provider: "together.ai",
+				provider: "together-ai",
 				organizationId: "org-id",
 				baseUrl: mockServerUrl,
 			},
@@ -215,7 +215,7 @@ describe("fallback and error status code handling", () => {
 		]);
 	}
 
-	async function setupSingleProviderWithMultipleKeys(provider = "together.ai") {
+	async function setupSingleProviderWithMultipleKeys(provider = "together-ai") {
 		await ensureBaseFixtures();
 
 		await db.insert(tables.apiKey).values({
@@ -867,7 +867,7 @@ describe("fallback and error status code handling", () => {
 
 		beforeEach(async () => {
 			await setupMultiProviderKeys();
-			await setRoutingMetrics(modelId, "together.ai", 0);
+			await setRoutingMetrics(modelId, "together-ai", 0);
 			await setRoutingMetrics(modelId, "cerebras", 100);
 		});
 
@@ -876,7 +876,7 @@ describe("fallback and error status code handling", () => {
 				{
 					id: "iam-allow-together",
 					ruleType: "allow_providers",
-					providers: ["together.ai"],
+					providers: ["together-ai"],
 				},
 			]);
 
@@ -887,20 +887,20 @@ describe("fallback and error status code handling", () => {
 					Authorization: "Bearer real-token",
 				},
 				body: JSON.stringify({
-					model: "together.ai/glm-4.7",
+					model: "together-ai/glm-4.7",
 					messages: [{ role: "user", content: "Hello!" }],
 				}),
 			});
 
 			expect(res.status).toBe(200);
 			const json = await res.json();
-			expect(json.metadata.used_provider).toBe("together.ai");
-			expect(json.metadata.requested_provider).toBe("together.ai");
+			expect(json.metadata.used_provider).toBe("together-ai");
+			expect(json.metadata.requested_provider).toBe("together-ai");
 
 			const logs = await waitForLogs(1);
 			expect(logs).toHaveLength(1);
-			expect(logs[0].usedProvider).toBe("together.ai");
-			expect(logs[0].routingMetadata?.selectedProvider).toBe("together.ai");
+			expect(logs[0].usedProvider).toBe("together-ai");
+			expect(logs[0].routingMetadata?.selectedProvider).toBe("together-ai");
 			expect(logs[0].routingMetadata?.selectionReason).not.toBe(
 				"low-uptime-fallback",
 			);
@@ -922,19 +922,19 @@ describe("fallback and error status code handling", () => {
 					Authorization: "Bearer real-token",
 				},
 				body: JSON.stringify({
-					model: "together.ai/glm-4.7",
+					model: "together-ai/glm-4.7",
 					messages: [{ role: "user", content: "Hello!" }],
 				}),
 			});
 
 			expect(res.status).toBe(200);
 			const json = await res.json();
-			expect(json.metadata.used_provider).toBe("together.ai");
+			expect(json.metadata.used_provider).toBe("together-ai");
 
 			const logs = await waitForLogs(1);
 			expect(logs).toHaveLength(1);
-			expect(logs[0].usedProvider).toBe("together.ai");
-			expect(logs[0].routingMetadata?.selectedProvider).toBe("together.ai");
+			expect(logs[0].usedProvider).toBe("together-ai");
+			expect(logs[0].routingMetadata?.selectedProvider).toBe("together-ai");
 			expect(logs[0].routingMetadata?.selectionReason).not.toBe(
 				"low-uptime-fallback",
 			);
@@ -945,7 +945,7 @@ describe("fallback and error status code handling", () => {
 				{
 					id: "iam-allow-together-combo",
 					ruleType: "allow_providers",
-					providers: ["together.ai"],
+					providers: ["together-ai"],
 				},
 				{
 					id: "iam-deny-cerebras-combo",
@@ -961,19 +961,19 @@ describe("fallback and error status code handling", () => {
 					Authorization: "Bearer real-token",
 				},
 				body: JSON.stringify({
-					model: "together.ai/glm-4.7",
+					model: "together-ai/glm-4.7",
 					messages: [{ role: "user", content: "Hello!" }],
 				}),
 			});
 
 			expect(res.status).toBe(200);
 			const json = await res.json();
-			expect(json.metadata.used_provider).toBe("together.ai");
+			expect(json.metadata.used_provider).toBe("together-ai");
 
 			const logs = await waitForLogs(1);
 			expect(logs).toHaveLength(1);
-			expect(logs[0].usedProvider).toBe("together.ai");
-			expect(logs[0].routingMetadata?.selectedProvider).toBe("together.ai");
+			expect(logs[0].usedProvider).toBe("together-ai");
+			expect(logs[0].routingMetadata?.selectedProvider).toBe("together-ai");
 			expect(logs[0].routingMetadata?.selectionReason).not.toBe(
 				"low-uptime-fallback",
 			);
@@ -1659,10 +1659,10 @@ describe("fallback and error status code handling", () => {
 		test("content filter hit reroutes away from content-filter providers and records it in routing metadata", async () => {
 			await setupMultiProviderKeys();
 
-			const togetherProvider = getProviderDefinition("together.ai");
+			const togetherProvider = getProviderDefinition("together-ai");
 			expect(togetherProvider).toBeDefined();
 			if (!togetherProvider) {
-				throw new Error("Missing together.ai provider fixture");
+				throw new Error("Missing together-ai provider fixture");
 			}
 
 			const originalContentFilterFlag = togetherProvider.contentFilter;
@@ -1703,11 +1703,11 @@ describe("fallback and error status code handling", () => {
 					selectedProvider: "cerebras",
 					contentFilterMatched: true,
 					contentFilterRerouted: true,
-					contentFilterExcludedProviders: ["together.ai"],
+					contentFilterExcludedProviders: ["together-ai"],
 				});
 				expect(log.routingMetadata?.providerScores).toContainEqual(
 					expect.objectContaining({
-						providerId: "together.ai",
+						providerId: "together-ai",
 						contentFilterProvider: true,
 						excludedByContentFilter: true,
 					}),
@@ -1749,10 +1749,10 @@ describe("fallback and error status code handling", () => {
 		test("content filter monitor mode does not reroute away from content-filter providers", async () => {
 			await setupMultiProviderKeys();
 
-			const togetherProvider = getProviderDefinition("together.ai");
+			const togetherProvider = getProviderDefinition("together-ai");
 			expect(togetherProvider).toBeDefined();
 			if (!togetherProvider) {
-				throw new Error("Missing together.ai provider fixture");
+				throw new Error("Missing together-ai provider fixture");
 			}
 
 			const originalContentFilterFlag = togetherProvider.contentFilter;
@@ -1787,10 +1787,10 @@ describe("fallback and error status code handling", () => {
 				expect(logs.length).toBe(1);
 
 				const log = logs[0];
-				expect(log.usedProvider).toBe("together.ai");
+				expect(log.usedProvider).toBe("together-ai");
 				expect(log.internalContentFilter).toBe(true);
 				expect(log.routingMetadata).toMatchObject({
-					selectedProvider: "together.ai",
+					selectedProvider: "together-ai",
 					contentFilterMatched: true,
 					contentFilterRerouted: false,
 				});
@@ -1799,7 +1799,7 @@ describe("fallback and error status code handling", () => {
 				).toBeUndefined();
 				expect(log.routingMetadata?.providerScores).not.toContainEqual(
 					expect.objectContaining({
-						providerId: "together.ai",
+						providerId: "together-ai",
 						excludedByContentFilter: true,
 					}),
 				);
@@ -2199,7 +2199,7 @@ describe("fallback and error status code handling", () => {
 				},
 				body: JSON.stringify({
 					// Explicit provider prefix - retry disabled
-					model: "together.ai/glm-4.7",
+					model: "together-ai/glm-4.7",
 					messages: [{ role: "user", content: "TRIGGER_FAIL_ONCE hello" }],
 				}),
 			});
@@ -2211,7 +2211,7 @@ describe("fallback and error status code handling", () => {
 		});
 
 		test("non-streaming: retries another key for the same explicit provider before provider fallback", async () => {
-			await setupSingleProviderWithMultipleKeys("together.ai");
+			await setupSingleProviderWithMultipleKeys("together-ai");
 
 			const res = await app.request("/v1/chat/completions", {
 				method: "POST",
@@ -2220,7 +2220,7 @@ describe("fallback and error status code handling", () => {
 					Authorization: "Bearer real-token",
 				},
 				body: JSON.stringify({
-					model: "together.ai/glm-4.7",
+					model: "together-ai/glm-4.7",
 					messages: [{ role: "user", content: "TRIGGER_FAIL_ONCE hello" }],
 				}),
 			});
@@ -2228,16 +2228,16 @@ describe("fallback and error status code handling", () => {
 			expect(res.status).toBe(200);
 			const json = await res.json();
 
-			expect(json.metadata.used_provider).toBe("together.ai");
+			expect(json.metadata.used_provider).toBe("together-ai");
 			expect(json.metadata.routing).toBeDefined();
 			expect(json.metadata.routing).toHaveLength(2);
 			expect(json.metadata.routing[0]).toMatchObject({
-				provider: "together.ai",
+				provider: "together-ai",
 				status_code: 500,
 				succeeded: false,
 			});
 			expect(json.metadata.routing[1]).toMatchObject({
-				provider: "together.ai",
+				provider: "together-ai",
 				succeeded: true,
 			});
 
@@ -2247,18 +2247,18 @@ describe("fallback and error status code handling", () => {
 			);
 			expect(successLog?.routingMetadata?.routing).toHaveLength(2);
 			expect(successLog?.routingMetadata?.routing?.[0]?.provider).toBe(
-				"together.ai",
+				"together-ai",
 			);
 			expect(successLog?.routingMetadata?.routing?.[1]?.provider).toBe(
-				"together.ai",
+				"together-ai",
 			);
 		});
 
 		test("non-streaming: retries another key for the same provider when X-No-Fallback is set", async () => {
-			await setupSingleProviderWithMultipleKeys("together.ai");
-			const primaryKeyHash = getApiKeyFingerprint("together.ai-primary-token");
+			await setupSingleProviderWithMultipleKeys("together-ai");
+			const primaryKeyHash = getApiKeyFingerprint("together-ai-primary-token");
 			const secondaryKeyHash = getApiKeyFingerprint(
-				"together.ai-secondary-token",
+				"together-ai-secondary-token",
 			);
 
 			const res = await app.request("/v1/chat/completions", {
@@ -2269,7 +2269,7 @@ describe("fallback and error status code handling", () => {
 					"X-No-Fallback": "true",
 				},
 				body: JSON.stringify({
-					model: "together.ai/glm-4.7",
+					model: "together-ai/glm-4.7",
 					messages: [{ role: "user", content: "TRIGGER_FAIL_ONCE hello" }],
 				}),
 			});
@@ -2277,7 +2277,7 @@ describe("fallback and error status code handling", () => {
 			expect(res.status).toBe(200);
 			const json = await res.json();
 
-			expect(json.metadata.used_provider).toBe("together.ai");
+			expect(json.metadata.used_provider).toBe("together-ai");
 			expect(json.metadata.routing).toBeDefined();
 			expect(json.metadata.routing).toHaveLength(2);
 			const jsonRoutingHashes = json.metadata.routing.map(
@@ -2287,12 +2287,12 @@ describe("fallback and error status code handling", () => {
 				new Set([primaryKeyHash, secondaryKeyHash]),
 			);
 			expect(json.metadata.routing[0]).toMatchObject({
-				provider: "together.ai",
+				provider: "together-ai",
 				status_code: 500,
 				succeeded: false,
 			});
 			expect(json.metadata.routing[1]).toMatchObject({
-				provider: "together.ai",
+				provider: "together-ai",
 				succeeded: true,
 			});
 
@@ -2313,10 +2313,10 @@ describe("fallback and error status code handling", () => {
 				),
 			).toEqual(new Set([primaryKeyHash, secondaryKeyHash]));
 			expect(successLog?.routingMetadata?.routing?.[0]).toMatchObject({
-				provider: "together.ai",
+				provider: "together-ai",
 			});
 			expect(successLog?.routingMetadata?.routing?.[1]).toMatchObject({
-				provider: "together.ai",
+				provider: "together-ai",
 			});
 		});
 
@@ -2513,10 +2513,10 @@ describe("fallback and error status code handling", () => {
 		});
 
 		test("streaming: retries another key for the same provider after timeout", async () => {
-			await setupSingleProviderWithMultipleKeys("together.ai");
-			const primaryKeyHash = getApiKeyFingerprint("together.ai-primary-token");
+			await setupSingleProviderWithMultipleKeys("together-ai");
+			const primaryKeyHash = getApiKeyFingerprint("together-ai-primary-token");
 			const secondaryKeyHash = getApiKeyFingerprint(
-				"together.ai-secondary-token",
+				"together-ai-secondary-token",
 			);
 			const originalStreamingTimeout = process.env.AI_STREAMING_TIMEOUT_MS;
 			process.env.AI_STREAMING_TIMEOUT_MS = "75";
@@ -2530,7 +2530,7 @@ describe("fallback and error status code handling", () => {
 						"X-No-Fallback": "true",
 					},
 					body: JSON.stringify({
-						model: "together.ai/glm-4.7",
+						model: "together-ai/glm-4.7",
 						messages: [{ role: "user", content: "TRIGGER_TIMEOUT_FAIL_ONCE" }],
 						stream: true,
 					}),
@@ -2561,12 +2561,12 @@ describe("fallback and error status code handling", () => {
 					),
 				).toEqual(new Set([primaryKeyHash, secondaryKeyHash]));
 				expect(successLog?.routingMetadata?.routing?.[0]).toMatchObject({
-					provider: "together.ai",
+					provider: "together-ai",
 					status_code: 0,
 					succeeded: false,
 				});
 				expect(successLog?.routingMetadata?.routing?.[1]).toMatchObject({
-					provider: "together.ai",
+					provider: "together-ai",
 					succeeded: true,
 				});
 			} finally {
@@ -2632,7 +2632,7 @@ describe("fallback and error status code handling", () => {
 				{
 					id: "iam-retry-allow-together",
 					ruleType: "allow_providers",
-					providers: ["together.ai"],
+					providers: ["together-ai"],
 				},
 			]);
 
@@ -2652,7 +2652,7 @@ describe("fallback and error status code handling", () => {
 
 			const logs = await waitForLogs(1);
 			expect(logs).toHaveLength(1);
-			expect(logs[0].usedProvider).toBe("together.ai");
+			expect(logs[0].usedProvider).toBe("together-ai");
 			expect(logs.some((log) => log.usedProvider === "cerebras")).toBe(false);
 		});
 
@@ -2682,7 +2682,7 @@ describe("fallback and error status code handling", () => {
 
 			const logs = await waitForLogs(1);
 			expect(logs).toHaveLength(1);
-			expect(logs[0].usedProvider).toBe("together.ai");
+			expect(logs[0].usedProvider).toBe("together-ai");
 			expect(logs.some((log) => log.usedProvider === "cerebras")).toBe(false);
 		});
 
@@ -2692,7 +2692,7 @@ describe("fallback and error status code handling", () => {
 				{
 					id: "iam-retry-allow-together-combo",
 					ruleType: "allow_providers",
-					providers: ["together.ai"],
+					providers: ["together-ai"],
 				},
 				{
 					id: "iam-retry-deny-cerebras-combo",
@@ -2717,7 +2717,7 @@ describe("fallback and error status code handling", () => {
 
 			const logs = await waitForLogs(1);
 			expect(logs).toHaveLength(1);
-			expect(logs[0].usedProvider).toBe("together.ai");
+			expect(logs[0].usedProvider).toBe("together-ai");
 			expect(logs.some((log) => log.usedProvider === "cerebras")).toBe(false);
 		});
 	});

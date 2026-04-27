@@ -262,6 +262,22 @@ export const providers = [
 		announcement: null,
 	},
 	{
+		id: "bluestone",
+		name: "Bluestone",
+		description: "Bluestone's OpenAI-compatible LLM inference API",
+		env: {
+			required: {
+				apiKey: "LLM_BLUESTONE_API_KEY",
+				baseUrl: "LLM_BLUESTONE_BASE_URL",
+			},
+		},
+		streaming: true,
+		cancellation: true,
+		color: "#0284c7",
+		website: null,
+		announcement: null,
+	},
+	{
 		id: "alibaba",
 		name: "Alibaba Cloud",
 		description:
@@ -467,7 +483,7 @@ export const providers = [
 		announcement: null,
 	},
 	{
-		id: "together.ai",
+		id: "together-ai",
 		name: "Together AI",
 		description:
 			"Together AI is a platform for running large language models in the cloud with fast inference.",

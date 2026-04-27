@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
 
-import { db, tables } from "@llmgateway/db";
+import { db, tables, type ProviderKeyOptions } from "@llmgateway/db";
 import {
 	type ModelDefinition,
 	getProviderDefinition,
@@ -559,6 +559,7 @@ export async function createProviderKey(
 	token: string,
 	keyType: "api-keys" | "credits" = "api-keys",
 	baseUrl?: string,
+	options?: ProviderKeyOptions,
 ) {
 	const keyId =
 		keyType === "credits" ? `env-${provider}` : `provider-key-${provider}`;
@@ -570,6 +571,7 @@ export async function createProviderKey(
 			provider: provider.replace("env-", ""), // Remove env- prefix for the provider field
 			organizationId: "org-id",
 			baseUrl,
+			options,
 		})
 		.onConflictDoNothing();
 }
@@ -672,18 +674,24 @@ export async function beforeAllHook() {
 		const baseUrlValue = baseUrlEnvName
 			? process.env[baseUrlEnvName]
 			: undefined;
+		const options: ProviderKeyOptions | undefined =
+			provider.id === "azure" && process.env.LLM_AZURE_RESOURCE
+				? { azure_resource: process.env.LLM_AZURE_RESOURCE }
+				: undefined;
 		if (envVarValue) {
 			await createProviderKey(
 				provider.id,
 				envVarValue,
 				"api-keys",
 				baseUrlValue,
+				options,
 			);
 			await createProviderKey(
 				provider.id,
 				envVarValue,
 				"credits",
 				baseUrlValue,
+				options,
 			);
 		}
 	}

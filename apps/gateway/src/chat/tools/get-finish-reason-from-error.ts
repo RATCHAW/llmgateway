@@ -29,6 +29,13 @@ export function getFinishReasonFromError(
 		return "upstream_error";
 	}
 
+	// 408 indicates the upstream provider's own request timeout (e.g. Azure
+	// returns 408 with `code: "Timeout"` for slow gpt-image edits). This is an
+	// upstream condition, not a client error, and should be retryable.
+	if (statusCode === 408) {
+		return "upstream_error";
+	}
+
 	// Azure OpenAI content filter (ResponsibleAIPolicyViolation)
 	if (errorText?.includes("ResponsibleAIPolicyViolation")) {
 		return "content_filter";

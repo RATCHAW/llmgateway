@@ -17,6 +17,17 @@ describe("getFinishReasonFromError", () => {
 		expect(getFinishReasonFromError(404)).toBe("upstream_error");
 	});
 
+	it("returns upstream_error for 408 upstream timeout", () => {
+		// e.g. Azure returns 408 with `code: "Timeout"` for slow gpt-image edits
+		expect(getFinishReasonFromError(408)).toBe("upstream_error");
+		expect(
+			getFinishReasonFromError(
+				408,
+				'{"error":{"code":"Timeout","message":"The operation was timeout."}}',
+			),
+		).toBe("upstream_error");
+	});
+
 	it("returns content_filter for Azure ResponsibleAIPolicyViolation", () => {
 		const azureError = JSON.stringify({
 			error: {

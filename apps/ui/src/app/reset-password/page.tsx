@@ -57,25 +57,33 @@ function ResetPasswordForm() {
 			return;
 		}
 		setIsLoading(true);
-		const { error } = await authClient.resetPassword({
-			newPassword: values.password,
-			token,
-		});
-		setIsLoading(false);
+		try {
+			const { error } = await authClient.resetPassword({
+				newPassword: values.password,
+				token,
+			});
 
-		if (error) {
+			if (error) {
+				toast({
+					title: error.message ?? "Failed to reset password",
+					variant: "destructive",
+				});
+				return;
+			}
+
 			toast({
-				title: error.message ?? "Failed to reset password",
+				title: "Password updated",
+				description: "Sign in with your new password.",
+			});
+			router.push("/login");
+		} catch (err) {
+			toast({
+				title: err instanceof Error ? err.message : "Failed to reset password",
 				variant: "destructive",
 			});
-			return;
+		} finally {
+			setIsLoading(false);
 		}
-
-		toast({
-			title: "Password updated",
-			description: "Sign in with your new password.",
-		});
-		router.push("/login");
 	}
 
 	const isInvalidToken = !token || errorParam === "INVALID_TOKEN";
@@ -144,7 +152,6 @@ function ResetPasswordForm() {
 														size="sm"
 														className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
 														onClick={() => setShowPassword(!showPassword)}
-														tabIndex={-1}
 													>
 														{showPassword ? (
 															<EyeOff className="h-4 w-4 text-muted-foreground" />

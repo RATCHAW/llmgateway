@@ -20,6 +20,7 @@ import {
 	DEV_PLAN_ANNUAL_DISCOUNT_MONTHS,
 	DEV_PLAN_PRICES,
 	getDevPlanAnnualPrice,
+	getDevPlanCreditsLimit,
 } from "@llmgateway/shared";
 
 import type { Metadata } from "next";
@@ -42,18 +43,36 @@ interface UsageRow {
 	max: string | boolean;
 }
 
+function formatUsd(amount: number): string {
+	return Number.isInteger(amount)
+		? `$${amount}`
+		: `$${amount.toFixed(2).replace(/\.?0+$/, "")}`;
+}
+
+function formatMultiplier(multiplier: number): string {
+	const rounded = Math.round(multiplier * 10) / 10;
+	return Number.isInteger(rounded) ? `~${rounded}×` : `~${rounded.toFixed(1)}×`;
+}
+
+const liteCredits = getDevPlanCreditsLimit("lite");
+const proCredits = getDevPlanCreditsLimit("pro");
+const maxCredits = getDevPlanCreditsLimit("max");
+const liteMultiplier = formatMultiplier(liteCredits / DEV_PLAN_PRICES.lite);
+const proMultiplier = formatMultiplier(proCredits / DEV_PLAN_PRICES.pro);
+const maxMultiplier = formatMultiplier(maxCredits / DEV_PLAN_PRICES.max);
+
 const usageRows: UsageRow[] = [
 	{
 		label: "Monthly model usage allowance",
-		lite: "$87",
-		pro: "$237",
-		max: "$537",
+		lite: formatUsd(liteCredits),
+		pro: formatUsd(proCredits),
+		max: formatUsd(maxCredits),
 	},
 	{
 		label: "Approx. effective discount vs. providers",
-		lite: "~3×",
-		pro: "~3×",
-		max: "~3×",
+		lite: liteMultiplier,
+		pro: proMultiplier,
+		max: maxMultiplier,
 	},
 	{
 		label: "Models included",
@@ -92,7 +111,7 @@ const usageRows: UsageRow[] = [
 		max: true,
 	},
 	{
-		label: "Annual billing (save 2 months)",
+		label: `Annual billing (save ${DEV_PLAN_ANNUAL_DISCOUNT_MONTHS} months)`,
 		lite: true,
 		pro: true,
 		max: true,
@@ -119,10 +138,21 @@ const usageRows: UsageRow[] = [
 
 function Cell({ value }: { value: string | boolean }) {
 	if (typeof value === "boolean") {
-		return value ? (
-			<Check className="mx-auto h-4 w-4 text-foreground/70" />
-		) : (
-			<Minus className="mx-auto h-4 w-4 text-muted-foreground/40" />
+		return (
+			<>
+				{value ? (
+					<Check
+						aria-hidden="true"
+						className="mx-auto h-4 w-4 text-foreground/70"
+					/>
+				) : (
+					<Minus
+						aria-hidden="true"
+						className="mx-auto h-4 w-4 text-muted-foreground/40"
+					/>
+				)}
+				<span className="sr-only">{value ? "Included" : "Not included"}</span>
+			</>
 		);
 	}
 	return (
@@ -141,7 +171,6 @@ export default function PricingPage() {
 			<Header />
 
 			<main>
-				{/* Hero */}
 				<section className="relative overflow-hidden">
 					<div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-muted/60 via-transparent to-transparent" />
 					<div className="container relative mx-auto px-4 pt-20 pb-12 sm:pt-24">
@@ -163,14 +192,12 @@ export default function PricingPage() {
 					</div>
 				</section>
 
-				{/* Pricing plans */}
 				<section id="plans" className="scroll-mt-20 py-12 px-4">
 					<div className="container mx-auto max-w-5xl">
 						<PricingPlans />
 					</div>
 				</section>
 
-				{/* Usage limits comparison */}
 				<section className="bg-muted/30 py-20 px-4">
 					<div className="container mx-auto max-w-5xl">
 						<div className="mb-12 max-w-2xl">
@@ -186,7 +213,6 @@ export default function PricingPage() {
 							</p>
 						</div>
 
-						{/* Comparison table */}
 						<div className="overflow-hidden rounded-xl border bg-card shadow-sm">
 							<div className="overflow-x-auto">
 								<table className="w-full text-left text-sm">
@@ -263,7 +289,6 @@ export default function PricingPage() {
 					</div>
 				</section>
 
-				{/* Token calculator callout */}
 				<section className="py-20 px-4">
 					<div className="container mx-auto max-w-3xl">
 						<div className="relative overflow-hidden rounded-2xl border bg-card p-8 shadow-sm sm:p-10">
@@ -304,10 +329,8 @@ export default function PricingPage() {
 					</div>
 				</section>
 
-				{/* FAQ */}
 				<Faq />
 
-				{/* Final CTA */}
 				<section className="border-t py-20 px-4">
 					<div className="container mx-auto max-w-2xl text-center">
 						<div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-full bg-muted">

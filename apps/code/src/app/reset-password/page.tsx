@@ -58,26 +58,39 @@ function ResetPasswordForm() {
 			return;
 		}
 		setIsLoading(true);
-		const { error } = await authClient.resetPassword({
-			newPassword: values.password,
-			token,
-		});
-		setIsLoading(false);
-
-		if (error) {
-			toast.error(error.message ?? "Failed to reset password", {
-				style: {
-					backgroundColor: "var(--destructive)",
-					color: "var(--destructive-foreground)",
-				},
+		try {
+			const { error } = await authClient.resetPassword({
+				newPassword: values.password,
+				token,
 			});
-			return;
-		}
 
-		toast.success("Password updated", {
-			description: "Sign in with your new password.",
-		});
-		router.push("/login");
+			if (error) {
+				toast.error(error.message ?? "Failed to reset password", {
+					style: {
+						backgroundColor: "var(--destructive)",
+						color: "var(--destructive-foreground)",
+					},
+				});
+				return;
+			}
+
+			toast.success("Password updated", {
+				description: "Sign in with your new password.",
+			});
+			router.push("/login");
+		} catch (err) {
+			toast.error(
+				err instanceof Error ? err.message : "Failed to reset password",
+				{
+					style: {
+						backgroundColor: "var(--destructive)",
+						color: "var(--destructive-foreground)",
+					},
+				},
+			);
+		} finally {
+			setIsLoading(false);
+		}
 	}
 
 	const isInvalidToken = !token || errorParam === "INVALID_TOKEN";

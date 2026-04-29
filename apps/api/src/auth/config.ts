@@ -508,16 +508,26 @@ If you didn't request this, you can safely ignore this email. Your password won'
 
 — The LLM Gateway Team`.trim();
 
+					if (process.env.NODE_ENV !== "production") {
+						logger.info("Password reset link generated (dev only)", {
+							email: user.email,
+							resetUrl: url,
+						});
+					}
+
 					try {
 						await sendTransactionalEmail({
 							to: user.email,
 							subject: "Reset your LLM Gateway password",
 							text,
+							strict: true,
+							logSafe: true,
 						});
 					} catch (error) {
 						logger.error(
 							"Failed to send password reset email",
 							error instanceof Error ? error : new Error(String(error)),
+							{ email: user.email },
 						);
 						throw new Error(
 							"Failed to send password reset email. Please try again.",

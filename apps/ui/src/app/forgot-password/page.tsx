@@ -41,22 +41,30 @@ export default function ForgotPassword() {
 		setIsLoading(true);
 		const redirectTo = `${window.location.origin}/reset-password`;
 
-		const { error } = await authClient.requestPasswordReset({
-			email: values.email,
-			redirectTo,
-		});
+		try {
+			const { error } = await authClient.requestPasswordReset({
+				email: values.email,
+				redirectTo,
+			});
 
-		setIsLoading(false);
+			if (error) {
+				toast({
+					title: error.message ?? "Failed to send reset email",
+					variant: "destructive",
+				});
+				return;
+			}
 
-		if (error) {
+			setSubmittedEmail(values.email);
+		} catch (err) {
 			toast({
-				title: error.message ?? "Failed to send reset email",
+				title:
+					err instanceof Error ? err.message : "Failed to send reset email",
 				variant: "destructive",
 			});
-			return;
+		} finally {
+			setIsLoading(false);
 		}
-
-		setSubmittedEmail(values.email);
 	}
 
 	return (

@@ -562,18 +562,18 @@ export function RecentLogs({
 					className="w-[200px]"
 				/>
 
-				<Button
-					type="button"
-					variant="outline"
-					onClick={() => void refetch()}
-					disabled={isLoading || isRefetching}
-					className="gap-2"
-				>
-					<RefreshCw
-						className={cn("h-4 w-4", isRefetching && "animate-spin")}
-					/>
-					{isRefetching ? "Refreshing..." : "Refresh"}
-				</Button>
+			<Button
+				type="button"
+				variant="outline"
+				onClick={() => void refetch()}
+				disabled={isLoading || isRefetching || isFetchingNextPage}
+				className="gap-2"
+			>
+				<RefreshCw
+					className={cn("h-4 w-4", isRefetching && "animate-spin")}
+				/>
+				{isRefetching ? "Refreshing..." : "Refresh"}
+			</Button>
 			</div>
 
 			{isLoading ? (

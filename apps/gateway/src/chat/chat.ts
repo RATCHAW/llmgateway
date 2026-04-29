@@ -5121,18 +5121,6 @@ chat.openapi(completions, async (c) => {
 										},
 									};
 								}
-							} else if (res.status === 408) {
-								// Surface upstream 408 (e.g. Azure "The operation was timeout.")
-								// as an upstream_timeout in the SSE error event.
-								errorData = {
-									error: {
-										message: `Upstream provider timeout: ${res.status} ${res.statusText} ${errorResponseText}`,
-										type: "upstream_timeout",
-										param: null,
-										code: "timeout",
-										responseText: errorResponseText,
-									},
-								};
 							} else {
 								errorData = {
 									error: {
@@ -8582,29 +8570,6 @@ chat.openapi(completions, async (c) => {
 				} catch {
 					// If we can't parse the original error, fall back to our format
 				}
-			}
-
-			// Upstream 408 is the provider's own request timeout (e.g. Azure
-			// returns 408 "The operation was timeout." for slow gpt-image edits).
-			// Surface it as a 504 upstream timeout so clients can treat it as
-			// a transient upstream failure rather than a generic 500.
-			if (res.status === 408) {
-				return c.json(
-					{
-						error: {
-							message: `Upstream provider timeout: ${res.status} ${res.statusText} ${errorResponseText}`,
-							type: "upstream_timeout",
-							param: null,
-							code: "timeout",
-							requestedProvider,
-							usedProvider,
-							requestedModel: initialRequestedModel,
-							usedModel,
-							responseText: errorResponseText,
-						},
-					},
-					504,
-				);
 			}
 
 			// Return our wrapped error response for non-client errors

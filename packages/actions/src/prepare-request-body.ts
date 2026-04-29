@@ -1031,15 +1031,13 @@ export async function prepareRequestBody(
 		}
 	}
 
-	// qwen3.6-35b-a3b returns empty content ~40% of the time when json_object
-	// is combined with thinking; force thinking off when JSON is requested.
-	if (
-		usedProvider === "alibaba" &&
-		usedModel === "qwen3.6-35b-a3b" &&
-		(response_format?.type === "json_object" ||
-			response_format?.type === "json_schema")
-	) {
-		requestBody.enable_thinking = false;
+	// Alibaba's API defaults `enable_thinking` to ON for thinking models.
+	// Mirror the OpenAI/Anthropic/Google/ZAI contract: thinking is opt-in via
+	// `reasoning_effort`. Unset or `minimal` => off, anything else => on.
+	if (usedProvider === "alibaba" && supportsReasoning) {
+		const wantsThinking =
+			reasoning_effort !== undefined && reasoning_effort !== "minimal";
+		requestBody.enable_thinking = wantsThinking;
 	}
 
 	if (forcesToolUse && usedProvider === "moonshot") {
@@ -1295,10 +1293,14 @@ export async function prepareRequestBody(
 			if (presence_penalty !== undefined) {
 				requestBody.presence_penalty = presence_penalty;
 			}
-			// ZAI/GLM models use 'thinking' parameter for reasoning instead of 'reasoning_effort'
+			// ZAI/GLM models use a `thinking` parameter instead of `reasoning_effort`.
+			// Mirror the OpenAI/Anthropic/Google contract: thinking is opt-in via
+			// `reasoning_effort`. Unset or `minimal` => disabled, anything else => enabled.
 			if (supportsReasoning) {
+				const wantsThinking =
+					reasoning_effort !== undefined && reasoning_effort !== "minimal";
 				requestBody.thinking = {
-					type: "enabled",
+					type: wantsThinking ? "enabled" : "disabled",
 				};
 			}
 			// Add sensitive_word_check if provided (Z.ai specific)

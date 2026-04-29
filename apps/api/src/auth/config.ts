@@ -509,9 +509,13 @@ If you didn't request this, you can safely ignore this email. Your password won'
 — The LLM Gateway Team`.trim();
 
 					if (process.env.NODE_ENV !== "production") {
+						const redactedUrl = url.replace(
+							/\/reset-password\/[^/?#]+/,
+							"/reset-password/<redacted-token>",
+						);
 						logger.info("Password reset link generated (dev only)", {
 							email: user.email,
-							resetUrl: url,
+							redactedUrl,
 						});
 					}
 

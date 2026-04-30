@@ -14,6 +14,7 @@ import {
 } from "@llmgateway/shared";
 
 import type { ServerTypes } from "@/vars.js";
+import type { ClientErrorStatusCode } from "hono/utils/http-status";
 
 let _stripe: Stripe | null = null;
 
@@ -620,6 +621,15 @@ payments.openapi(topUpWithSavedMethod, async (c) => {
 			throw new HTTPException(402, {
 				message: userMessage,
 			});
+		}
+
+		if (err instanceof Stripe.errors.StripeError) {
+			throw new HTTPException(
+				(err.statusCode ?? 400) as ClientErrorStatusCode,
+				{
+					message: err.message,
+				},
+			);
 		}
 
 		throw err;

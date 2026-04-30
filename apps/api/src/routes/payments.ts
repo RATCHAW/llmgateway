@@ -63,6 +63,7 @@ const createPaymentIntent = createRoute({
 				"application/json": {
 					schema: z.object({
 						amount: creditTopUpAmountSchema,
+						stripePaymentMethodId: z.string().optional(),
 					}),
 				},
 			},
@@ -74,6 +75,8 @@ const createPaymentIntent = createRoute({
 				"application/json": {
 					schema: z.object({
 						clientSecret: z.string(),
+						totalAmount: z.number(),
+						isInternational: z.boolean(),
 					}),
 				},
 			},
@@ -99,7 +102,7 @@ payments.openapi(createPaymentIntent, async (c) => {
 		});
 	}
 
-	const { amount } = c.req.valid("json");
+	const { amount, stripePaymentMethodId } = c.req.valid("json");
 
 	const userOrganization = await db.query.userOrganization.findFirst({
 		where: {
@@ -120,8 +123,13 @@ payments.openapi(createPaymentIntent, async (c) => {
 
 	const stripeCustomerId = await ensureStripeCustomer(organizationId);
 
+	const isInternational = stripePaymentMethodId
+		? await isInternationalPaymentMethod(stripePaymentMethodId)
+		: false;
+
 	const feeBreakdown = calculateFees({
 		amount,
+		isInternational,
 	});
 
 	const paymentIntent = await getStripe().paymentIntents.create({
@@ -129,10 +137,13 @@ payments.openapi(createPaymentIntent, async (c) => {
 		currency: "usd",
 		description: `Credit purchase for ${amount} USD (including fees)`,
 		customer: stripeCustomerId,
+		...(stripePaymentMethodId ? { payment_method: stripePaymentMethodId } : {}),
 		metadata: {
 			organizationId,
 			baseAmount: amount.toString(),
 			platformFee: feeBreakdown.platformFee.toString(),
+			internationalFee: feeBreakdown.internationalFee.toString(),
+			isInternational: isInternational.toString(),
 			userEmail: user.email,
 			userId: user.id,
 		},
@@ -140,6 +151,8 @@ payments.openapi(createPaymentIntent, async (c) => {
 
 	return c.json({
 		clientSecret: paymentIntent.client_secret ?? "",
+		totalAmount: feeBreakdown.totalAmount,
+		isInternational,
 	});
 });
 

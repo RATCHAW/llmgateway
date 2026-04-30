@@ -422,6 +422,16 @@ function AmountStep({
 										${feeData.platformFee.toFixed(2)}
 									</span>
 								</div>
+								{feeData.internationalFee > 0 ? (
+									<div className="flex justify-between">
+										<span className="text-muted-foreground">
+											International card fee
+										</span>
+										<span className="tabular-nums">
+											${feeData.internationalFee.toFixed(2)}
+										</span>
+									</div>
+								) : null}
 								{hasBonus && feeData.bonusAmount ? (
 									<div className="-mx-2 flex justify-between rounded bg-green-50 px-2 py-1 font-semibold text-green-600 dark:bg-green-950/50 dark:text-green-400">
 										<span>
@@ -1079,6 +1089,12 @@ function ConfirmPaymentStep({
 								<span>Platform fee (5%)</span>
 								<span>${feeData.platformFee.toFixed(2)}</span>
 							</div>
+							{feeData.internationalFee > 0 ? (
+								<div className="flex justify-between">
+									<span>International card fee (1.5%)</span>
+									<span>${feeData.internationalFee.toFixed(2)}</span>
+								</div>
+							) : null}
 							<div className="border-t pt-2 flex justify-between font-medium">
 								<span>Total</span>
 								<span>${feeData.totalAmount.toFixed(2)}</span>

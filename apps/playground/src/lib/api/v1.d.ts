@@ -6791,7 +6791,9 @@ export interface paths {
                         "application/json": {
                             baseAmount: number;
                             platformFee: number;
+                            internationalFee: number;
                             totalAmount: number;
+                            isInternational: boolean;
                             bonusAmount?: number;
                             finalCreditAmount?: number;
                             bonusEnabled: boolean;

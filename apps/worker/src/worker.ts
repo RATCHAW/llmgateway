@@ -425,9 +425,23 @@ export async function processAutoTopUp(): Promise<void> {
 					},
 				});
 
-				// Use centralized fee calculator
+				let isInternational = false;
+				try {
+					const stripePaymentMethod = await getStripe().paymentMethods.retrieve(
+						defaultPaymentMethod.stripePaymentMethodId,
+					);
+					const country = stripePaymentMethod.card?.country;
+					isInternational = Boolean(country) && country !== "US";
+				} catch (err) {
+					logger.error(
+						`Failed to retrieve payment method country for organization ${org.id}, defaulting to domestic`,
+						err as Error,
+					);
+				}
+
 				const feeBreakdown = calculateFees({
 					amount: topUpAmount,
+					isInternational,
 				});
 
 				// Insert pending transaction before creating payment intent
@@ -464,6 +478,8 @@ export async function processAutoTopUp(): Promise<void> {
 							transactionId: pendingTransaction.id,
 							baseAmount: feeBreakdown.baseAmount.toString(),
 							platformFee: feeBreakdown.platformFee.toString(),
+							internationalFee: feeBreakdown.internationalFee.toString(),
+							isInternational: isInternational.toString(),
 							...(orgUser?.user?.email && { userEmail: orgUser.user.email }),
 						},
 					});

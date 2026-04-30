@@ -44,6 +44,16 @@ const creditTopUpAmountSchema = z
 	.min(CREDIT_TOP_UP_MIN_AMOUNT, "Minimum top-up amount is $5.")
 	.max(CREDIT_TOP_UP_MAX_AMOUNT, "Maximum top-up amount is $5000.");
 
+export async function isInternationalPaymentMethod(
+	stripePaymentMethodId: string,
+): Promise<boolean> {
+	const stripePaymentMethod = await getStripe().paymentMethods.retrieve(
+		stripePaymentMethodId,
+	);
+	const country = stripePaymentMethod.card?.country;
+	return Boolean(country) && country !== "US";
+}
+
 const createPaymentIntent = createRoute({
 	method: "post",
 	path: "/create-payment-intent",
@@ -576,8 +586,13 @@ payments.openapi(topUpWithSavedMethod, async (c) => {
 		});
 	}
 
+	const isInternational = await isInternationalPaymentMethod(
+		paymentMethod.stripePaymentMethodId,
+	);
+
 	const feeBreakdown = calculateFees({
 		amount,
+		isInternational,
 	});
 
 	let paymentIntent: Stripe.PaymentIntent;
@@ -595,6 +610,8 @@ payments.openapi(topUpWithSavedMethod, async (c) => {
 				organizationId: userOrganization.organization.id,
 				baseAmount: amount.toString(),
 				platformFee: feeBreakdown.platformFee.toString(),
+				internationalFee: feeBreakdown.internationalFee.toString(),
+				isInternational: isInternational.toString(),
 				userEmail: user.email,
 				userId: user.id,
 			},
@@ -838,7 +855,9 @@ const calculateFeesRoute = createRoute({
 					schema: z.object({
 						baseAmount: z.number(),
 						platformFee: z.number(),
+						internationalFee: z.number(),
 						totalAmount: z.number(),
+						isInternational: z.boolean(),
 						bonusAmount: z.number().optional(),
 						finalCreditAmount: z.number().optional(),
 						bonusEnabled: z.boolean(),
@@ -863,7 +882,10 @@ payments.openapi(calculateFeesRoute, async (c) => {
 		});
 	}
 
-	const { amount }: { amount: number } = c.req.valid("json");
+	const {
+		amount,
+		paymentMethodId,
+	}: { amount: number; paymentMethodId?: string } = c.req.valid("json");
 
 	const userOrganization = await db.query.userOrganization.findFirst({
 		where: {
@@ -881,8 +903,25 @@ payments.openapi(calculateFeesRoute, async (c) => {
 		});
 	}
 
+	let isInternational = false;
+	if (paymentMethodId) {
+		const paymentMethod = await db.query.paymentMethod.findFirst({
+			where: {
+				id: paymentMethodId,
+				organizationId: userOrganization.organization.id,
+			},
+		});
+
+		if (paymentMethod) {
+			isInternational = await isInternationalPaymentMethod(
+				paymentMethod.stripePaymentMethodId,
+			);
+		}
+	}
+
 	const feeBreakdown = calculateFees({
 		amount,
+		isInternational,
 	});
 
 	// Calculate bonus for first-time and second top-up credit purchases
@@ -961,6 +1000,7 @@ payments.openapi(calculateFeesRoute, async (c) => {
 
 	return c.json({
 		...feeBreakdown,
+		isInternational,
 		bonusAmount: bonusAmount > 0 ? bonusAmount : undefined,
 		finalCreditAmount: bonusAmount > 0 ? finalCreditAmount : undefined,
 		bonusEnabled,

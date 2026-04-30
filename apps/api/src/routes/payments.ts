@@ -7,6 +7,7 @@ import { ensureStripeCustomer } from "@/stripe.js";
 
 import { logAuditEvent } from "@llmgateway/audit";
 import { db, eq, tables } from "@llmgateway/db";
+import { logger } from "@llmgateway/logger";
 import {
 	calculateFees,
 	CREDIT_TOP_UP_MAX_AMOUNT,
@@ -14,7 +15,10 @@ import {
 } from "@llmgateway/shared";
 
 import type { ServerTypes } from "@/vars.js";
-import type { ClientErrorStatusCode } from "hono/utils/http-status";
+import type {
+	ClientErrorStatusCode,
+	ServerErrorStatusCode,
+} from "hono/utils/http-status";
 
 let _stripe: Stripe | null = null;
 
@@ -624,8 +628,21 @@ payments.openapi(topUpWithSavedMethod, async (c) => {
 		}
 
 		if (err instanceof Stripe.errors.StripeError) {
+			logger.error("Stripe error on credit top-up", err, {
+				organizationId: userOrganization.organization.id,
+				userId: user.id,
+				paymentMethodId,
+				amount,
+				stripeType: err.type,
+				stripeCode: err.code,
+				stripeStatusCode: err.statusCode,
+				stripeRequestId: err.requestId,
+			});
+
 			throw new HTTPException(
-				(err.statusCode ?? 400) as ClientErrorStatusCode,
+				(err.statusCode ?? 400) as
+					| ClientErrorStatusCode
+					| ServerErrorStatusCode,
 				{
 					message: err.message,
 				},

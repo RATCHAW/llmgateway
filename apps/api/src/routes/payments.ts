@@ -123,9 +123,29 @@ payments.openapi(createPaymentIntent, async (c) => {
 
 	const stripeCustomerId = await ensureStripeCustomer(organizationId);
 
-	const isInternational = stripePaymentMethodId
-		? await isInternationalPaymentMethod(stripePaymentMethodId)
-		: false;
+	let isInternational = false;
+	if (stripePaymentMethodId) {
+		const stripePaymentMethod = await getStripe().paymentMethods.retrieve(
+			stripePaymentMethodId,
+		);
+
+		const paymentMethodCustomer =
+			typeof stripePaymentMethod.customer === "string"
+				? stripePaymentMethod.customer
+				: (stripePaymentMethod.customer?.id ?? null);
+
+		// Freshly created PMs are unattached (customer === null) until the
+		// setup_intent.succeeded webhook attaches them. Reject only when the
+		// PM is attached to a *different* customer.
+		if (paymentMethodCustomer && paymentMethodCustomer !== stripeCustomerId) {
+			throw new HTTPException(403, {
+				message: "Payment method does not belong to this customer",
+			});
+		}
+
+		const country = stripePaymentMethod.card?.country;
+		isInternational = Boolean(country) && country !== "US";
+	}
 
 	const feeBreakdown = calculateFees({
 		amount,

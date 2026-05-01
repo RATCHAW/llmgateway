@@ -434,9 +434,10 @@ export async function processAutoTopUp(): Promise<void> {
 					isInternational = Boolean(country) && country !== "US";
 				} catch (err) {
 					logger.error(
-						`Failed to retrieve payment method country for organization ${org.id}, defaulting to domestic`,
+						`Failed to retrieve payment method ${defaultPaymentMethod.stripePaymentMethodId} for organization ${org.id}; skipping auto top-up cycle to avoid undercharging international cards`,
 						err as Error,
 					);
+					continue;
 				}
 
 				const feeBreakdown = calculateFees({

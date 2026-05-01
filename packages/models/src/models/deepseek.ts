@@ -155,6 +155,7 @@ export const deepseekModels = [
 				tools: true,
 			},
 			{
+				stability: "unstable",
 				providerId: "canopywave",
 				modelName: "deepseek/deepseek-chat-v3.2",
 				inputPrice: 0.26 / 1e6,

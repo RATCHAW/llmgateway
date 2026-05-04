@@ -12,6 +12,7 @@ import {
 	eq,
 	errorDetails,
 	gatewayContentFilterResponseSchema,
+	getTableColumns,
 	gt,
 	gte,
 	type InferSelectModel,
@@ -32,6 +33,13 @@ import type { ServerTypes } from "@/vars.js";
 export const logs = new OpenAPIHono<ServerTypes>();
 
 type LogRecord = InferSelectModel<typeof tables.log>;
+
+const logSelection = {
+	...getTableColumns(tables.log),
+	organizationName: tables.organization.name,
+	projectName: tables.project.name,
+	apiKeyName: tables.apiKey.description,
+};
 
 async function enrichLogsWithVideoContentUrls<T extends LogRecord>(
 	logEntries: T[],
@@ -57,8 +65,11 @@ const logSchema = z.object({
 	createdAt: z.date(),
 	updatedAt: z.date(),
 	organizationId: z.string(),
+	organizationName: z.string().nullable().optional(),
 	projectId: z.string(),
+	projectName: z.string().nullable().optional(),
 	apiKeyId: z.string(),
+	apiKeyName: z.string().nullable().optional(),
 	duration: z.number(),
 	requestedModel: z.string(),
 	requestedProvider: z.string().nullable(),
@@ -569,7 +580,15 @@ logs.openapi(get, async (c) => {
 			: [desc(tables.log.createdAt), desc(tables.log.id)];
 
 	// Execute the query using select
-	let dbQuery = db.select().from(tables.log);
+	let dbQuery = db
+		.select(logSelection)
+		.from(tables.log)
+		.leftJoin(
+			tables.organization,
+			eq(tables.log.organizationId, tables.organization.id),
+		)
+		.leftJoin(tables.project, eq(tables.log.projectId, tables.project.id))
+		.leftJoin(tables.apiKey, eq(tables.log.apiKeyId, tables.apiKey.id));
 
 	if (finalWhereClause) {
 		// @ts-ignore
@@ -779,9 +798,17 @@ logs.openapi(getById, async (c) => {
 
 	const { id } = c.req.valid("param");
 
-	const log = await db.query.log.findFirst({
-		where: { id },
-	});
+	const [log] = await db
+		.select(logSelection)
+		.from(tables.log)
+		.leftJoin(
+			tables.organization,
+			eq(tables.log.organizationId, tables.organization.id),
+		)
+		.leftJoin(tables.project, eq(tables.log.projectId, tables.project.id))
+		.leftJoin(tables.apiKey, eq(tables.log.apiKeyId, tables.apiKey.id))
+		.where(eq(tables.log.id, id))
+		.limit(1);
 
 	if (!log) {
 		throw new HTTPException(404, { message: "Log not found" });

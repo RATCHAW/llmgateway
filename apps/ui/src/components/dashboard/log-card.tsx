@@ -12,6 +12,12 @@ import {
 
 import type { Log } from "@llmgateway/db";
 
+type DashboardLog = Partial<Log> & {
+	organizationName?: string | null;
+	projectName?: string | null;
+	apiKeyName?: string | null;
+};
+
 function NextLink({
 	href,
 	className,
@@ -33,7 +39,7 @@ export function LogCard({
 	orgId,
 	projectId,
 }: {
-	log: Partial<Log>;
+	log: DashboardLog;
 	orgId?: string;
 	projectId?: string;
 }) {
@@ -65,6 +71,7 @@ export function LogCard({
 			getDetailUrl={getDetailUrl}
 			getRetriedUrl={getRetriedUrl}
 			renderLink={NextLink}
+			showCopyButtons
 			isUserFacing
 			fetchImageContent={fetchImageContent}
 		/>

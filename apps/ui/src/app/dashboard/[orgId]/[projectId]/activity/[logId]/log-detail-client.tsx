@@ -38,6 +38,12 @@ import { cn } from "@/lib/utils";
 import type { LogDetailData } from "@/types/activity";
 import type { Log } from "@llmgateway/db";
 
+type LogWithResources = Log & {
+	organizationName?: string | null;
+	projectName?: string | null;
+	apiKeyName?: string | null;
+};
+
 interface ImageConfig {
 	aspect_ratio?: string;
 	image_size?: string;
@@ -55,11 +61,13 @@ interface LogDetailClientProps {
 	logId: string;
 }
 
-function CopyButton({ value }: { value: string }) {
+function CopyButton({ value, label }: { value: string; label: string }) {
 	const [copied, setCopied] = useState(false);
 	return (
 		<button
 			type="button"
+			aria-label={label}
+			title={label}
 			onClick={() => {
 				void navigator.clipboard.writeText(value);
 				setCopied(true);
@@ -69,6 +77,30 @@ function CopyButton({ value }: { value: string }) {
 		>
 			{copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
 		</button>
+	);
+}
+
+function RelatedResourceValue({
+	id,
+	name,
+	copyLabel,
+}: {
+	id: string;
+	name?: string | null;
+	copyLabel: string;
+}) {
+	const displayName = name?.trim();
+
+	return (
+		<span className="min-w-0 space-y-0.5 text-right">
+			{displayName && <span className="block break-words">{displayName}</span>}
+			<span className="flex min-w-0 items-center justify-end gap-1.5 font-mono text-xs text-muted-foreground break-all">
+				<span className="min-w-0 break-all">
+					{displayName ? `ID: ${id}` : id}
+				</span>
+				<CopyButton value={id} label={copyLabel} />
+			</span>
+		</span>
 	);
 }
 
@@ -343,7 +375,7 @@ export function LogDetailClient({
 			? new Date(data.log.lastVideoDownloadedAt)
 			: null,
 		videoDownloadCount: data.log.videoDownloadCount ?? 0,
-	} as Log;
+	} as LogWithResources;
 
 	const imageConfig = (log.params as { image_config?: ImageConfig } | null)
 		?.image_config;
@@ -916,7 +948,10 @@ export function LogDetailClient({
 									value={
 										<span className="inline-flex items-center gap-2">
 											<span className="font-mono text-xs">{log.requestId}</span>
-											<CopyButton value={log.requestId} />
+											<CopyButton
+												value={log.requestId}
+												label="Copy request ID"
+											/>
 										</span>
 									}
 								/>
@@ -925,20 +960,28 @@ export function LogDetailClient({
 									value={
 										<span className="inline-flex items-center gap-2">
 											<span className="font-mono text-xs">{log.id}</span>
-											<CopyButton value={log.id} />
+											<CopyButton value={log.id} label="Copy log ID" />
 										</span>
 									}
 								/>
 								<Field
-									label="Project ID"
+									label="Project"
 									value={
-										<span className="font-mono text-xs">{log.projectId}</span>
+										<RelatedResourceValue
+											id={log.projectId}
+											name={log.projectName}
+											copyLabel="Copy project ID"
+										/>
 									}
 								/>
 								<Field
-									label="API Key ID"
+									label="API Key"
 									value={
-										<span className="font-mono text-xs">{log.apiKeyId}</span>
+										<RelatedResourceValue
+											id={log.apiKeyId}
+											name={log.apiKeyName}
+											copyLabel="Copy API key ID"
+										/>
 									}
 								/>
 								<Field label="Mode" value={log.mode || "?"} />

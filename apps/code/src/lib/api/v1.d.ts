@@ -884,8 +884,11 @@ export interface paths {
                                 createdAt: string;
                                 updatedAt: string;
                                 organizationId: string;
+                                organizationName?: string | null;
                                 projectId: string;
+                                projectName?: string | null;
                                 apiKeyId: string;
+                                apiKeyName?: string | null;
                                 duration: number;
                                 requestedModel: string;
                                 requestedProvider: string | null;
@@ -1129,8 +1132,11 @@ export interface paths {
                                 createdAt: string;
                                 updatedAt: string;
                                 organizationId: string;
+                                organizationName?: string | null;
                                 projectId: string;
+                                projectName?: string | null;
                                 apiKeyId: string;
+                                apiKeyName?: string | null;
                                 duration: number;
                                 requestedModel: string;
                                 requestedProvider: string | null;

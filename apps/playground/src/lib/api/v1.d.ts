@@ -3414,6 +3414,7 @@ export interface paths {
                                 outputPrice: string | null;
                                 cachedInputPrice: string | null;
                                 cacheWriteInputPrice: string | null;
+                                cacheWriteInputPrice1h: string | null;
                                 imageInputPrice: string | null;
                                 requestPrice: string | null;
                                 contextSize: number | null;
@@ -8694,6 +8695,7 @@ export interface operations {
                                 outputPrice: string | null;
                                 cachedInputPrice: string | null;
                                 cacheWriteInputPrice: string | null;
+                                cacheWriteInputPrice1h: string | null;
                                 imageInputPrice: string | null;
                                 imageOutputPrice: string | null;
                                 imageInputTokensByResolution: {

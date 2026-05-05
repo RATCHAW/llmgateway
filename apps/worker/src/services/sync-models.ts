@@ -143,6 +143,11 @@ export async function syncProvidersAndModels() {
 									mapping.cacheWriteInputPrice !== undefined
 										? mapping.cacheWriteInputPrice.toString()
 										: null,
+								cacheWriteInputPrice1h:
+									"cacheWriteInputPrice1h" in mapping &&
+									mapping.cacheWriteInputPrice1h !== undefined
+										? mapping.cacheWriteInputPrice1h.toString()
+										: null,
 								imageInputPrice:
 									"imageInputPrice" in mapping &&
 									mapping.imageInputPrice !== undefined
@@ -232,6 +237,11 @@ export async function syncProvidersAndModels() {
 								"cacheWriteInputPrice" in mapping &&
 								mapping.cacheWriteInputPrice !== undefined
 									? mapping.cacheWriteInputPrice.toString()
+									: undefined,
+							cacheWriteInputPrice1h:
+								"cacheWriteInputPrice1h" in mapping &&
+								mapping.cacheWriteInputPrice1h !== undefined
+									? mapping.cacheWriteInputPrice1h.toString()
 									: undefined,
 							imageInputPrice:
 								"imageInputPrice" in mapping &&

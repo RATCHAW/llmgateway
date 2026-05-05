@@ -1140,6 +1140,7 @@ export const modelProviderMapping = pgTable(
 		outputPrice: decimal(),
 		cachedInputPrice: decimal(),
 		cacheWriteInputPrice: decimal(),
+		cacheWriteInputPrice1h: decimal(),
 		imageInputPrice: decimal(),
 		requestPrice: decimal(),
 		contextSize: integer(),

@@ -143,6 +143,63 @@ describe("calculateCosts", () => {
 		expect(result.estimatedCost).toBe(false); // Not estimated
 	});
 
+	it("should price 1h cache writes at the 1h rate when cacheWrite1hTokens is provided", async () => {
+		// claude-3-5-sonnet-20241022 input is 3.0/1M; 5m write 3.75/1M; 1h write 6.0/1M.
+		// 4 non-cached + 1000 cache creation total (300 5m + 700 1h) = 1004 prompt tokens.
+		const result = await calculateCosts(
+			"claude-3-5-sonnet-20241022",
+			"anthropic",
+			1004,
+			50,
+			0,
+			undefined,
+			null,
+			0,
+			undefined,
+			0,
+			null,
+			null,
+			undefined,
+			{
+				cacheWriteTokens: 1000,
+				cacheWrite1hTokens: 700,
+			},
+		);
+
+		expect(result.inputCost).toBeCloseTo(4 * (3.0 / 1e6));
+		// 300 tokens at 5m rate (3.75/1M) + 700 tokens at 1h rate (6.0/1M)
+		const fiveMinuteCost = 300 * (3.75 / 1e6);
+		const oneHourCost = 700 * (6.0 / 1e6);
+		expect(result.cacheWriteInputCost).toBeCloseTo(
+			fiveMinuteCost + oneHourCost,
+		);
+		expect(result.cacheWriteTokens).toBe(1000);
+	});
+
+	it("should fall back to the 5m rate for cache writes when no 1h count is provided", async () => {
+		// Pre-existing behavior: cacheWriteTokens is the sum, priced entirely at 5m rate.
+		const result = await calculateCosts(
+			"claude-3-5-sonnet-20241022",
+			"anthropic",
+			1004,
+			50,
+			0,
+			undefined,
+			null,
+			0,
+			undefined,
+			0,
+			null,
+			null,
+			undefined,
+			{
+				cacheWriteTokens: 1000,
+			},
+		);
+
+		expect(result.cacheWriteInputCost).toBeCloseTo(1000 * (3.75 / 1e6));
+	});
+
 	it("should calculate costs with cached tokens for Anthropic (subsequent request - cache read)", async () => {
 		// For Anthropic subsequent request: 4 non-cached + 1659 cache read = 1663 total tokens, 1659 cache reads
 		const result = await calculateCosts(

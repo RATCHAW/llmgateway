@@ -38,12 +38,14 @@ function getPricingForTokenCount(
 	baseOutputPrice: number,
 	baseCachedInputPrice: number | undefined,
 	baseCacheWriteInputPrice: number | undefined,
+	baseCacheWriteInputPrice1h: number | undefined,
 	promptTokens: number,
 ): {
 	inputPrice: number;
 	outputPrice: number;
 	cachedInputPrice: number | undefined;
 	cacheWriteInputPrice: number | undefined;
+	cacheWriteInputPrice1h: number | undefined;
 	tierName: string | undefined;
 } {
 	if (!pricingTiers || pricingTiers.length === 0) {
@@ -52,6 +54,7 @@ function getPricingForTokenCount(
 			outputPrice: baseOutputPrice,
 			cachedInputPrice: baseCachedInputPrice,
 			cacheWriteInputPrice: baseCacheWriteInputPrice,
+			cacheWriteInputPrice1h: baseCacheWriteInputPrice1h,
 			tierName: undefined,
 		};
 	}
@@ -65,6 +68,8 @@ function getPricingForTokenCount(
 				cachedInputPrice: tier.cachedInputPrice ?? baseCachedInputPrice,
 				cacheWriteInputPrice:
 					tier.cacheWriteInputPrice ?? baseCacheWriteInputPrice,
+				cacheWriteInputPrice1h:
+					tier.cacheWriteInputPrice1h ?? baseCacheWriteInputPrice1h,
 				tierName: tier.name,
 			};
 		}
@@ -78,6 +83,8 @@ function getPricingForTokenCount(
 		cachedInputPrice: lastTier.cachedInputPrice ?? baseCachedInputPrice,
 		cacheWriteInputPrice:
 			lastTier.cacheWriteInputPrice ?? baseCacheWriteInputPrice,
+		cacheWriteInputPrice1h:
+			lastTier.cacheWriteInputPrice1h ?? baseCacheWriteInputPrice1h,
 		tierName: lastTier.name,
 	};
 }
@@ -110,9 +117,11 @@ export async function calculateCosts(
 	imageQuality?: string,
 	options?: {
 		cacheWriteTokens?: number | null;
+		cacheWrite1hTokens?: number | null;
 	},
 ) {
 	const cacheWriteTokens = options?.cacheWriteTokens ?? null;
+	const cacheWrite1hTokens = options?.cacheWrite1hTokens ?? null;
 
 	// Find the model info - try both base model name and provider model name
 	// Strip :region suffix if present (e.g., "deepseek-v3.2:cn-beijing" → "deepseek-v3.2")
@@ -275,6 +284,7 @@ export async function calculateCosts(
 		providerInfo.outputPrice ?? 0,
 		providerInfo.cachedInputPrice,
 		providerInfo.cacheWriteInputPrice,
+		providerInfo.cacheWriteInputPrice1h,
 		calculatedPromptTokens,
 	);
 
@@ -287,6 +297,13 @@ export async function calculateCosts(
 		pricing.cacheWriteInputPrice !== undefined
 			? new Decimal(pricing.cacheWriteInputPrice)
 			: null;
+	// 1-hour cache writes fall back to the 5m rate when no separate price is set,
+	// so providers without an explicit 1h price (e.g., non-Anthropic) keep
+	// their existing behavior.
+	const cacheWriteInputPrice1h =
+		pricing.cacheWriteInputPrice1h !== undefined
+			? new Decimal(pricing.cacheWriteInputPrice1h)
+			: cacheWriteInputPrice;
 	const requestPrice = new Decimal(providerInfo.requestPrice ?? 0);
 
 	// Get effective discount (checks org-specific, global, then hardcoded)
@@ -403,12 +420,29 @@ export async function calculateCosts(
 				.times(cachedInputPrice)
 				.times(discountMultiplier)
 		: new Decimal(0);
-	const cacheWriteInputCost =
-		cacheWriteInputPrice && cacheWriteTokens
-			? new Decimal(cacheWriteTokens)
-					.times(cacheWriteInputPrice)
-					.times(discountMultiplier)
-			: new Decimal(0);
+	// `cacheWriteTokens` is the total cache-creation tokens (5m + 1h).
+	// `cacheWrite1hTokens` is the 1h subset; the remainder is treated as 5m.
+	// Each TTL is priced at its own rate; non-Anthropic providers without a
+	// separate 1h rate fall back to the 5m rate for both, matching prior behavior.
+	const totalCacheWriteTokens = cacheWriteTokens ?? 0;
+	const oneHourCacheWriteTokens = Math.min(
+		cacheWrite1hTokens ?? 0,
+		totalCacheWriteTokens,
+	);
+	const fiveMinuteCacheWriteTokens = Math.max(
+		0,
+		totalCacheWriteTokens - oneHourCacheWriteTokens,
+	);
+	const cacheWriteInputCost = cacheWriteInputPrice
+		? new Decimal(fiveMinuteCacheWriteTokens)
+				.times(cacheWriteInputPrice)
+				.plus(
+					new Decimal(oneHourCacheWriteTokens).times(
+						cacheWriteInputPrice1h ?? cacheWriteInputPrice,
+					),
+				)
+				.times(discountMultiplier)
+		: new Decimal(0);
 	const requestCost = requestPrice.times(discountMultiplier);
 
 	// Calculate web search cost

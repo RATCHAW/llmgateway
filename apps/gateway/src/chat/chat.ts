@@ -5696,6 +5696,7 @@ chat.openapi(completions, async (c) => {
 				let reasoningTokens = null;
 				let cachedTokens = null;
 				let cacheCreationTokens: number | null = null;
+				let cacheCreation1hTokens: number | null = null;
 				let streamingToolCalls = null;
 				let imageByteSize = 0; // Track total image data size for token estimation
 				let outputImageCount = 0; // Track number of output images for cost calculation
@@ -6120,6 +6121,7 @@ chat.openapi(completions, async (c) => {
 										image_config?.image_quality,
 										{
 											cacheWriteTokens: cacheCreationTokens,
+											cacheWrite1hTokens: cacheCreation1hTokens,
 										},
 									);
 									streamingCosts.dataStorageCost = toDataStorageCostNumber(
@@ -6905,6 +6907,16 @@ chat.openapi(completions, async (c) => {
 								if (usage.cacheCreationTokens !== null) {
 									cacheCreationTokens = usage.cacheCreationTokens;
 								}
+								if (usage.cacheCreation1hTokens !== null) {
+									cacheCreation1hTokens = usage.cacheCreation1hTokens;
+								}
+								if (
+									usage.totalTokens === null &&
+									promptTokens !== null &&
+									completionTokens !== null
+								) {
+									totalTokens = promptTokens + completionTokens;
+								}
 
 								// Estimate tokens if not provided and we have a finish reason
 								if (finishReason && (!promptTokens || !completionTokens)) {
@@ -7378,6 +7390,7 @@ chat.openapi(completions, async (c) => {
 										image_config?.image_quality,
 										{
 											cacheWriteTokens: cacheCreationTokens,
+											cacheWrite1hTokens: cacheCreation1hTokens,
 										},
 									);
 						if (streamingCostsEarly.totalCost !== null) {
@@ -7675,6 +7688,7 @@ chat.openapi(completions, async (c) => {
 									image_config?.image_quality,
 									{
 										cacheWriteTokens: cacheCreationTokens,
+										cacheWrite1hTokens: cacheCreation1hTokens,
 									},
 								));
 
@@ -9241,6 +9255,7 @@ chat.openapi(completions, async (c) => {
 		reasoningTokens,
 		cachedTokens,
 		cacheCreationTokens,
+		cacheCreation1hTokens,
 		imageInputTokens,
 		imageOutputTokens,
 		toolResults,
@@ -9362,6 +9377,7 @@ chat.openapi(completions, async (c) => {
 		image_config?.image_quality,
 		{
 			cacheWriteTokens: cacheCreationTokens,
+			cacheWrite1hTokens: cacheCreation1hTokens,
 		},
 	);
 	costs.dataStorageCost = toDataStorageCostNumber(

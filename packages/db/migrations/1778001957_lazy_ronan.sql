@@ -1,0 +1,1 @@
+ALTER TABLE "model_provider_mapping" ADD COLUMN "cache_write_input_price1h" numeric;

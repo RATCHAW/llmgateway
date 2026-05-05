@@ -46,6 +46,7 @@ export function extractTokenUsage(
 	let reasoningTokens = null;
 	let cachedTokens = null;
 	let cacheCreationTokens = null;
+	let cacheCreation1hTokens: number | null = null;
 
 	switch (provider) {
 		case "google-ai-studio":
@@ -115,25 +116,40 @@ export function extractTokenUsage(
 			}
 			break;
 		case "anthropic":
-			if (data.usage) {
+			{
+				const usage = data.message?.usage ?? data.usage;
+				if (!usage) {
+					break;
+				}
 				// For Anthropic: input_tokens are the non-cached tokens
 				// We need to add cache_creation_input_tokens to get total input tokens
-				const inputTokens = data.usage.input_tokens ?? 0;
-				// TODO: Anthropic supports two cache TTLs (5m at 1.25x, 1h at 2x).
-				// `cache_creation_input_tokens` is the sum; the per-TTL breakdown is in
-				// `usage.cache_creation.{ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`.
-				// We currently price everything at the 5m rate, which under-bills 1h writes.
-				const cacheCreation = data.usage.cache_creation_input_tokens ?? 0;
-				const cacheReadTokens = data.usage.cache_read_input_tokens ?? 0;
+				const hasInputUsage =
+					usage.input_tokens !== undefined ||
+					usage.cache_creation_input_tokens !== undefined ||
+					usage.cache_read_input_tokens !== undefined ||
+					usage.cache_creation !== undefined;
+				if (hasInputUsage) {
+					const inputTokens = usage.input_tokens ?? 0;
+					// Anthropic supports two cache TTLs (5m at 1.25x, 1h at 2x).
+					// `cache_creation_input_tokens` is the sum; the per-TTL breakdown is in
+					// `usage.cache_creation.{ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`.
+					const cacheCreation = usage.cache_creation_input_tokens ?? 0;
+					const cacheCreation1h =
+						usage.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+					const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
 
-				// Total prompt tokens = non-cached + cache creation + cache read
-				promptTokens = inputTokens + cacheCreation + cacheReadTokens;
-				completionTokens = data.usage.output_tokens ?? null;
-				reasoningTokens = data.usage.reasoning_output_tokens ?? null;
-				// Cached tokens are the tokens read from cache (discount applies to these)
-				cachedTokens = cacheReadTokens;
-				cacheCreationTokens = cacheCreation;
-				totalTokens = (promptTokens ?? 0) + (completionTokens ?? 0);
+					// Total prompt tokens = non-cached + cache creation + cache read
+					promptTokens = inputTokens + cacheCreation + cacheReadTokens;
+					// Cached tokens are the tokens read from cache (discount applies to these)
+					cachedTokens = cacheReadTokens;
+					cacheCreationTokens = cacheCreation;
+					cacheCreation1hTokens = cacheCreation1h > 0 ? cacheCreation1h : null;
+				}
+				completionTokens = usage.output_tokens ?? null;
+				reasoningTokens = usage.reasoning_output_tokens ?? null;
+				if (promptTokens !== null && completionTokens !== null) {
+					totalTokens = promptTokens + completionTokens;
+				}
 			}
 			break;
 		default: // OpenAI format
@@ -164,5 +180,6 @@ export function extractTokenUsage(
 		reasoningTokens,
 		cachedTokens,
 		cacheCreationTokens,
+		cacheCreation1hTokens,
 	};
 }

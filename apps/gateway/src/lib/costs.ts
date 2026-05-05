@@ -37,11 +37,13 @@ function getPricingForTokenCount(
 	baseInputPrice: number,
 	baseOutputPrice: number,
 	baseCachedInputPrice: number | undefined,
+	baseCacheWriteInputPrice: number | undefined,
 	promptTokens: number,
 ): {
 	inputPrice: number;
 	outputPrice: number;
 	cachedInputPrice: number | undefined;
+	cacheWriteInputPrice: number | undefined;
 	tierName: string | undefined;
 } {
 	if (!pricingTiers || pricingTiers.length === 0) {
@@ -49,6 +51,7 @@ function getPricingForTokenCount(
 			inputPrice: baseInputPrice,
 			outputPrice: baseOutputPrice,
 			cachedInputPrice: baseCachedInputPrice,
+			cacheWriteInputPrice: baseCacheWriteInputPrice,
 			tierName: undefined,
 		};
 	}
@@ -60,6 +63,8 @@ function getPricingForTokenCount(
 				inputPrice: tier.inputPrice,
 				outputPrice: tier.outputPrice,
 				cachedInputPrice: tier.cachedInputPrice ?? baseCachedInputPrice,
+				cacheWriteInputPrice:
+					tier.cacheWriteInputPrice ?? baseCacheWriteInputPrice,
 				tierName: tier.name,
 			};
 		}
@@ -71,6 +76,8 @@ function getPricingForTokenCount(
 		inputPrice: lastTier.inputPrice,
 		outputPrice: lastTier.outputPrice,
 		cachedInputPrice: lastTier.cachedInputPrice ?? baseCachedInputPrice,
+		cacheWriteInputPrice:
+			lastTier.cacheWriteInputPrice ?? baseCacheWriteInputPrice,
 		tierName: lastTier.name,
 	};
 }
@@ -101,7 +108,12 @@ export async function calculateCosts(
 	webSearchCount: number | null = null,
 	organizationId: string | null = null,
 	imageQuality?: string,
+	options?: {
+		cacheWriteTokens?: number | null;
+	},
 ) {
+	const cacheWriteTokens = options?.cacheWriteTokens ?? null;
+
 	// Find the model info - try both base model name and provider model name
 	// Strip :region suffix if present (e.g., "deepseek-v3.2:cn-beijing" → "deepseek-v3.2")
 	const baseModel = model.includes(":") ? model.split(":")[0] : model;
@@ -122,6 +134,7 @@ export async function calculateCosts(
 			inputCost: null,
 			outputCost: null,
 			cachedInputCost: null,
+			cacheWriteInputCost: null,
 			requestCost: null,
 			webSearchCost: null,
 			imageInputTokens: null,
@@ -133,6 +146,7 @@ export async function calculateCosts(
 			promptTokens,
 			completionTokens,
 			cachedTokens,
+			cacheWriteTokens,
 			estimatedCost: false,
 			discount: undefined,
 			pricingTier: undefined,
@@ -194,6 +208,7 @@ export async function calculateCosts(
 			inputCost: null,
 			outputCost: null,
 			cachedInputCost: null,
+			cacheWriteInputCost: null,
 			requestCost: null,
 			webSearchCost: null,
 			imageInputTokens: null,
@@ -205,6 +220,7 @@ export async function calculateCosts(
 			promptTokens: calculatedPromptTokens,
 			completionTokens: calculatedCompletionTokens,
 			cachedTokens,
+			cacheWriteTokens,
 			estimatedCost: isEstimated,
 			discount: undefined,
 			pricingTier: undefined,
@@ -233,6 +249,7 @@ export async function calculateCosts(
 			inputCost: null,
 			outputCost: null,
 			cachedInputCost: null,
+			cacheWriteInputCost: null,
 			requestCost: null,
 			webSearchCost: null,
 			imageInputTokens: null,
@@ -244,6 +261,7 @@ export async function calculateCosts(
 			promptTokens: calculatedPromptTokens,
 			completionTokens: calculatedCompletionTokens,
 			cachedTokens,
+			cacheWriteTokens,
 			estimatedCost: isEstimated,
 			discount: undefined,
 			pricingTier: undefined,
@@ -256,6 +274,7 @@ export async function calculateCosts(
 		providerInfo.inputPrice ?? 0,
 		providerInfo.outputPrice ?? 0,
 		providerInfo.cachedInputPrice,
+		providerInfo.cacheWriteInputPrice,
 		calculatedPromptTokens,
 	);
 
@@ -264,6 +283,10 @@ export async function calculateCosts(
 	const cachedInputPrice = new Decimal(
 		pricing.cachedInputPrice ?? pricing.inputPrice,
 	);
+	const cacheWriteInputPrice =
+		pricing.cacheWriteInputPrice !== undefined
+			? new Decimal(pricing.cacheWriteInputPrice)
+			: null;
 	const requestPrice = new Decimal(providerInfo.requestPrice ?? 0);
 
 	// Get effective discount (checks org-specific, global, then hardcoded)
@@ -315,9 +338,16 @@ export async function calculateCosts(
 	// For Anthropic: calculatedPromptTokens includes all tokens, but we need to subtract cached tokens
 	// that get charged at the discounted rate
 	// For other providers (like OpenAI), prompt_tokens includes cached tokens, so we subtract them too
-	const uncachedPromptTokens = cachedTokens
-		? calculatedPromptTokens - cachedTokens
-		: calculatedPromptTokens;
+	const cachedReadTokens = cachedTokens ?? 0;
+	const separatelyPricedCacheWriteTokens = cacheWriteInputPrice
+		? (cacheWriteTokens ?? 0)
+		: 0;
+	const uncachedPromptTokens = Math.max(
+		0,
+		calculatedPromptTokens -
+			cachedReadTokens -
+			separatelyPricedCacheWriteTokens,
+	);
 	// inputCost includes both text and image input costs when applicable
 	const inputCost = new Decimal(uncachedPromptTokens)
 		.times(inputPrice)
@@ -373,6 +403,12 @@ export async function calculateCosts(
 				.times(cachedInputPrice)
 				.times(discountMultiplier)
 		: new Decimal(0);
+	const cacheWriteInputCost =
+		cacheWriteInputPrice && cacheWriteTokens
+			? new Decimal(cacheWriteTokens)
+					.times(cacheWriteInputPrice)
+					.times(discountMultiplier)
+			: new Decimal(0);
 	const requestCost = requestPrice.times(discountMultiplier);
 
 	// Calculate web search cost
@@ -387,6 +423,7 @@ export async function calculateCosts(
 	const totalCost = inputCost
 		.plus(outputCost)
 		.plus(cachedInputCost)
+		.plus(cacheWriteInputCost)
 		.plus(requestCost)
 		.plus(webSearchCost);
 
@@ -394,6 +431,7 @@ export async function calculateCosts(
 		inputCost: inputCost.toNumber(),
 		outputCost: outputCost.toNumber(),
 		cachedInputCost: cachedInputCost.toNumber(),
+		cacheWriteInputCost: cacheWriteInputCost.toNumber(),
 		requestCost: requestCost.toNumber(),
 		webSearchCost: webSearchCost.toNumber(),
 		imageInputTokens,
@@ -415,6 +453,7 @@ export async function calculateCosts(
 				: calculatedPromptTokens,
 		completionTokens: calculatedCompletionTokens,
 		cachedTokens,
+		cacheWriteTokens,
 		estimatedCost: isEstimated,
 		discount: discount !== 0 ? discount : undefined,
 		pricingTier: pricing.tierName,

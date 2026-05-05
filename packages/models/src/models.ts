@@ -45,6 +45,10 @@ export interface PricingTier {
 	 * Price per cached input token in USD for this tier
 	 */
 	cachedInputPrice?: number;
+	/**
+	 * Price per cache write input token in USD for this tier
+	 */
+	cacheWriteInputPrice?: number;
 }
 
 /**
@@ -72,6 +76,10 @@ export interface ProviderRegion {
 	 * Price per cached input token in USD for this region
 	 */
 	cachedInputPrice?: number;
+	/**
+	 * Price per cache write input token in USD for this region
+	 */
+	cacheWriteInputPrice?: number;
 	/**
 	 * Context-length based pricing tiers for this region.
 	 * When absent, falls back to the mapping-level pricingTiers.
@@ -133,6 +141,10 @@ export interface ProviderModelMapping {
 	 * Price per cached input token in USD
 	 */
 	cachedInputPrice?: number;
+	/**
+	 * Price per cache write input token in USD
+	 */
+	cacheWriteInputPrice?: number;
 	/**
 	 * Minimum number of tokens required for a segment to be cacheable.
 	 * Prompts smaller than this threshold won't be cached even with cache_control set.

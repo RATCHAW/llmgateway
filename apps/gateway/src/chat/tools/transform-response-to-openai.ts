@@ -8,6 +8,7 @@ export interface CostData {
 	inputCost: number | null;
 	outputCost: number | null;
 	cachedInputCost: number | null;
+	cacheWriteInputCost?: number | null;
 	requestCost: number | null;
 	webSearchCost: number | null;
 	imageInputCost: number | null;
@@ -47,8 +48,9 @@ export function applyExtendedUsageFields(
 		if (hasInferenceCosts) {
 			const inputCost = costs.inputCost ?? 0;
 			const cachedInputCost = costs.cachedInputCost ?? 0;
+			const cacheWriteInputCost = costs.cacheWriteInputCost ?? 0;
 			const outputCost = costs.outputCost ?? 0;
-			const promptCost = inputCost + cachedInputCost;
+			const promptCost = inputCost + cachedInputCost + cacheWriteInputCost;
 			const completionsCost = outputCost;
 			// upstream_inference_cost intentionally excludes requestCost/webSearchCost, so usage.cost may be larger.
 			usage.cost_details = {
@@ -59,6 +61,7 @@ export function applyExtendedUsageFields(
 				input_cost: costs.inputCost,
 				output_cost: costs.outputCost,
 				cached_input_cost: costs.cachedInputCost,
+				cache_write_input_cost: costs.cacheWriteInputCost,
 				request_cost: costs.requestCost,
 				web_search_cost: costs.webSearchCost,
 				image_input_cost: costs.imageInputCost,
@@ -82,6 +85,9 @@ export function applyExtendedUsageFields(
 		0;
 	const resolvedPromptImageTokens =
 		imageInputTokens ?? existingPromptDetails.image_tokens ?? 0;
+	// `cache_write_tokens` is the canonical field; `cache_creation_tokens` is emitted
+	// alongside it for backward compatibility with consumers that read the older name.
+	// Readers should prefer `cache_write_tokens ?? cache_creation_tokens`.
 	usage.prompt_tokens_details = {
 		...existingPromptDetails,
 		cached_tokens: resolvedCacheRead,

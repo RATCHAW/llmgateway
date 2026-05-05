@@ -250,7 +250,8 @@ modelsApi.openapi(listModels, async (c) => {
 					request: firstProviderWithPricing?.requestPrice?.toString() ?? "0",
 					input_cache_read:
 						firstProviderWithPricing?.cachedInputPrice?.toString() ?? "0",
-					input_cache_write: "0", // Not defined in model definitions yet
+					input_cache_write:
+						firstProviderWithPricing?.cacheWriteInputPrice?.toString() ?? "0",
 					web_search: "0", // Not defined in model definitions yet
 					internal_reasoning: "0", // Not defined in model definitions yet
 				},

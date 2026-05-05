@@ -757,7 +757,9 @@ anthropic.openapi(messages, async (c) => {
 											chunk.usage.prompt_tokens_details ?? {};
 										const cacheRead: number = promptDetails.cached_tokens ?? 0;
 										const cacheCreation: number =
-											promptDetails.cache_creation_tokens ?? 0;
+											promptDetails.cache_write_tokens ??
+											promptDetails.cache_creation_tokens ??
+											0;
 										const totalPrompt: number = chunk.usage.prompt_tokens ?? 0;
 										const nonCachedInput = Math.max(
 											0,
@@ -862,7 +864,8 @@ anthropic.openapi(messages, async (c) => {
 
 	const usageDetails = openaiResponse.usage?.prompt_tokens_details ?? {};
 	const cachedTokens: number = usageDetails.cached_tokens ?? 0;
-	const cacheCreationTokens: number = usageDetails.cache_creation_tokens ?? 0;
+	const cacheCreationTokens: number =
+		usageDetails.cache_write_tokens ?? usageDetails.cache_creation_tokens ?? 0;
 	const totalPromptTokens: number = openaiResponse.usage?.prompt_tokens ?? 0;
 	const nonCachedInputTokens = Math.max(
 		0,

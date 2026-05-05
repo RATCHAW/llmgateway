@@ -118,15 +118,28 @@ describe("calculateCosts", () => {
 			1663,
 			50,
 			0,
+			undefined,
+			null,
+			0,
+			undefined,
+			0,
+			null,
+			null,
+			undefined,
+			{
+				cacheWriteTokens: 1659,
+			},
 		);
 
-		expect(result.inputCost).toBeCloseTo(0.004989); // 1663 * 0.000003 (all tokens charged full price)
+		expect(result.inputCost).toBeCloseTo(0.000012); // 4 * 0.000003 (non-cache-write tokens)
 		expect(result.outputCost).toBeCloseTo(0.00075); // 50 * 0.000015
 		expect(result.cachedInputCost).toBeCloseTo(0); // 0 cache reads
-		expect(result.totalCost).toBeCloseTo(0.005739); // 0.004989 + 0.00075 + 0
+		expect(result.cacheWriteInputCost).toBeCloseTo(0.00622125); // 1659 * 0.00000375
+		expect(result.totalCost).toBeCloseTo(0.00698325); // 0.000012 + 0.00075 + 0.00622125
 		expect(result.promptTokens).toBe(1663);
 		expect(result.completionTokens).toBe(50);
 		expect(result.cachedTokens).toBe(0);
+		expect(result.cacheWriteTokens).toBe(1659);
 		expect(result.estimatedCost).toBe(false); // Not estimated
 	});
 
@@ -143,6 +156,7 @@ describe("calculateCosts", () => {
 		expect(result.inputCost).toBeCloseTo(0.000012); // 4 * 0.000003 (only non-cached tokens at full price)
 		expect(result.outputCost).toBeCloseTo(0.00075); // 50 * 0.000015
 		expect(result.cachedInputCost).toBeCloseTo(0.0004977); // 1659 * 0.0000003 (cached token price)
+		expect(result.cacheWriteInputCost).toBeCloseTo(0);
 		expect(result.totalCost).toBeCloseTo(0.0012597); // 0.000012 + 0.00075 + 0.0004977
 		expect(result.promptTokens).toBe(1663);
 		expect(result.completionTokens).toBe(50);

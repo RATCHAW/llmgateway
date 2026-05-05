@@ -23,6 +23,7 @@ export interface ApiModelProviderMapping {
 	inputPrice: string | null;
 	outputPrice: string | null;
 	cachedInputPrice: string | null;
+	cacheWriteInputPrice: string | null;
 	imageInputPrice: string | null;
 	imageOutputPrice: string | null;
 	imageInputTokensByResolution: Record<string, number> | null;

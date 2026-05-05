@@ -49,6 +49,7 @@ const modelProviderMappingSchema = z.object({
 	inputPrice: z.string().nullable(),
 	outputPrice: z.string().nullable(),
 	cachedInputPrice: z.string().nullable(),
+	cacheWriteInputPrice: z.string().nullable(),
 	imageInputPrice: z.string().nullable(),
 	imageOutputPrice: z.string().nullable(),
 	imageInputTokensByResolution: z.record(z.number()).nullable(),

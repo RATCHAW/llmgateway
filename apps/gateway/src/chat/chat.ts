@@ -920,6 +920,7 @@ const completions = createRoute({
 									input_cost: z.number().nullable().optional(),
 									output_cost: z.number().nullable().optional(),
 									cached_input_cost: z.number().nullable().optional(),
+									cache_write_input_cost: z.number().nullable().optional(),
 									request_cost: z.number().nullable().optional(),
 									web_search_cost: z.number().nullable().optional(),
 									image_input_cost: z.number().nullable().optional(),
@@ -3596,6 +3597,9 @@ chat.openapi(completions, async (c) => {
 						: (totalTokens?.toString() ?? null),
 					reasoningTokens: reasoningTokens?.toString() ?? null,
 					cachedTokens: cachedTokens?.toString() ?? null,
+					// TODO: Extract cache write tokens from cached streaming usage chunks
+					// and pass them through cost/log handling like non-streaming cache replay.
+					cacheWriteTokens: null,
 					hasError: false,
 					streamed: true,
 					canceled: false,
@@ -3603,6 +3607,7 @@ chat.openapi(completions, async (c) => {
 					inputCost: costs.inputCost ?? 0,
 					outputCost: costs.outputCost ?? 0,
 					cachedInputCost: costs.cachedInputCost ?? 0,
+					cacheWriteInputCost: costs.cacheWriteInputCost ?? 0,
 					requestCost: costs.requestCost ?? 0,
 					webSearchCost: costs.webSearchCost ?? 0,
 					imageInputTokens: costs.imageInputTokens?.toString() ?? null,
@@ -3726,6 +3731,14 @@ chat.openapi(completions, async (c) => {
 					inputImageCount,
 					null, // webSearchCount
 					project.organizationId,
+					undefined,
+					{
+						cacheWriteTokens:
+							cachedResponse.usage?.prompt_tokens_details?.cache_write_tokens ??
+							cachedResponse.usage?.prompt_tokens_details
+								?.cache_creation_tokens ??
+							null,
+					},
 				);
 
 				// Estimate cached response size based on content to avoid expensive stringify
@@ -3763,6 +3776,11 @@ chat.openapi(completions, async (c) => {
 					reasoningTokens: cachedResponse.usage?.reasoning_tokens ?? null,
 					cachedTokens:
 						cachedResponse.usage?.prompt_tokens_details?.cached_tokens ?? null,
+					cacheWriteTokens:
+						(
+							cachedResponse.usage?.prompt_tokens_details?.cache_write_tokens ??
+							cachedResponse.usage?.prompt_tokens_details?.cache_creation_tokens
+						)?.toString() ?? null,
 					hasError: false,
 					streamed: false,
 					canceled: false,
@@ -3770,6 +3788,7 @@ chat.openapi(completions, async (c) => {
 					inputCost: cachedCosts.inputCost ?? 0,
 					outputCost: cachedCosts.outputCost ?? 0,
 					cachedInputCost: cachedCosts.cachedInputCost ?? 0,
+					cacheWriteInputCost: cachedCosts.cacheWriteInputCost ?? 0,
 					requestCost: cachedCosts.requestCost ?? 0,
 					webSearchCost: cachedCosts.webSearchCost ?? 0,
 					imageInputTokens: cachedCosts.imageInputTokens?.toString() ?? null,
@@ -4381,6 +4400,7 @@ chat.openapi(completions, async (c) => {
 							inputCost: streamingCosts.inputCost,
 							outputCost: streamingCosts.outputCost,
 							cachedInputCost: streamingCosts.cachedInputCost,
+							cacheWriteInputCost: streamingCosts.cacheWriteInputCost,
 							requestCost: streamingCosts.requestCost,
 							webSearchCost: streamingCosts.webSearchCost,
 							imageInputCost: streamingCosts.imageInputCost,
@@ -6098,6 +6118,9 @@ chat.openapi(completions, async (c) => {
 										webSearchCount,
 										project.organizationId,
 										image_config?.image_quality,
+										{
+											cacheWriteTokens: cacheCreationTokens,
+										},
 									);
 									streamingCosts.dataStorageCost = toDataStorageCostNumber(
 										streamingCosts.promptTokens ?? finalPromptTokens,
@@ -6149,6 +6172,8 @@ chat.openapi(completions, async (c) => {
 													inputCost: streamingCosts.inputCost,
 													outputCost: streamingCosts.outputCost,
 													cachedInputCost: streamingCosts.cachedInputCost,
+													cacheWriteInputCost:
+														streamingCosts.cacheWriteInputCost,
 													requestCost: streamingCosts.requestCost,
 													webSearchCost: streamingCosts.webSearchCost,
 													imageInputCost: streamingCosts.imageInputCost,
@@ -7314,6 +7339,7 @@ chat.openapi(completions, async (c) => {
 										inputCost: null,
 										outputCost: null,
 										cachedInputCost: null,
+										cacheWriteInputCost: null,
 										requestCost: null,
 										webSearchCost: null,
 										imageInputTokens: null,
@@ -7324,6 +7350,7 @@ chat.openapi(completions, async (c) => {
 										promptTokens: null,
 										completionTokens: null,
 										cachedTokens: null,
+										cacheWriteTokens: null,
 										estimatedCost: false,
 										discount: undefined,
 										pricingTier: undefined,
@@ -7349,6 +7376,9 @@ chat.openapi(completions, async (c) => {
 										webSearchCount,
 										project.organizationId,
 										image_config?.image_quality,
+										{
+											cacheWriteTokens: cacheCreationTokens,
+										},
 									);
 						if (streamingCostsEarly.totalCost !== null) {
 							streamingCostsEarly.dataStorageCost = toDataStorageCostNumber(
@@ -7422,6 +7452,8 @@ chat.openapi(completions, async (c) => {
 											inputCost: streamingCostsEarly.inputCost,
 											outputCost: streamingCostsEarly.outputCost,
 											cachedInputCost: streamingCostsEarly.cachedInputCost,
+											cacheWriteInputCost:
+												streamingCostsEarly.cacheWriteInputCost,
 											requestCost: streamingCostsEarly.requestCost,
 											webSearchCost: streamingCostsEarly.webSearchCost,
 											imageInputCost: streamingCostsEarly.imageInputCost,
@@ -7604,6 +7636,7 @@ chat.openapi(completions, async (c) => {
 									inputCost: null,
 									outputCost: null,
 									cachedInputCost: null,
+									cacheWriteInputCost: null,
 									requestCost: null,
 									webSearchCost: null,
 									imageInputTokens: null,
@@ -7614,6 +7647,7 @@ chat.openapi(completions, async (c) => {
 									promptTokens: null,
 									completionTokens: null,
 									cachedTokens: null,
+									cacheWriteTokens: null,
 									estimatedCost: false,
 									discount: undefined,
 									pricingTier: undefined,
@@ -7639,6 +7673,9 @@ chat.openapi(completions, async (c) => {
 									webSearchCount,
 									project.organizationId,
 									image_config?.image_quality,
+									{
+										cacheWriteTokens: cacheCreationTokens,
+									},
 								));
 
 					// Use costs.promptTokens as canonical value (includes image input
@@ -7757,6 +7794,9 @@ chat.openapi(completions, async (c) => {
 						cachedTokens: shouldIncludeTokensForBilling
 							? (cachedTokens?.toString() ?? null)
 							: null,
+						cacheWriteTokens: shouldIncludeTokensForBilling
+							? (cacheCreationTokens?.toString() ?? null)
+							: null,
 						hasError: streamingError !== null,
 						errorDetails: streamingError
 							? {
@@ -7794,6 +7834,7 @@ chat.openapi(completions, async (c) => {
 						inputCost: costs.inputCost,
 						outputCost: costs.outputCost,
 						cachedInputCost: costs.cachedInputCost,
+						cacheWriteInputCost: costs.cacheWriteInputCost,
 						requestCost: costs.requestCost,
 						webSearchCost: costs.webSearchCost,
 						imageInputTokens: costs.imageInputTokens?.toString() ?? null,
@@ -9319,6 +9360,9 @@ chat.openapi(completions, async (c) => {
 		webSearchCount,
 		project.organizationId,
 		image_config?.image_quality,
+		{
+			cacheWriteTokens: cacheCreationTokens,
+		},
 	);
 	costs.dataStorageCost = toDataStorageCostNumber(
 		costs.promptTokens ?? calculatedPromptTokens,
@@ -9370,6 +9414,7 @@ chat.openapi(completions, async (c) => {
 					inputCost: costs.inputCost,
 					outputCost: costs.outputCost,
 					cachedInputCost: costs.cachedInputCost,
+					cacheWriteInputCost: costs.cacheWriteInputCost,
 					requestCost: costs.requestCost,
 					webSearchCost: costs.webSearchCost,
 					imageInputCost: costs.imageInputCost,
@@ -9502,6 +9547,7 @@ chat.openapi(completions, async (c) => {
 			).toString(),
 		reasoningTokens: calculatedReasoningTokens?.toString() ?? null,
 		cachedTokens: cachedTokens?.toString() ?? null,
+		cacheWriteTokens: cacheCreationTokens?.toString() ?? null,
 		hasError: hasEmptyNonStreamingResponse,
 		streamed: false,
 		canceled: false,
@@ -9516,6 +9562,7 @@ chat.openapi(completions, async (c) => {
 		inputCost: costs.inputCost,
 		outputCost: costs.outputCost,
 		cachedInputCost: costs.cachedInputCost,
+		cacheWriteInputCost: costs.cacheWriteInputCost,
 		requestCost: costs.requestCost,
 		webSearchCost: costs.webSearchCost,
 		imageInputTokens: costs.imageInputTokens?.toString() ?? null,

@@ -84,6 +84,7 @@ describe("extractTokenUsage", () => {
 			const result = extractTokenUsage(data, "anthropic");
 
 			expect(result.cachedTokens).toBe(0);
+			expect(result.cacheCreationTokens).toBe(50);
 			expect(result.promptTokens).toBe(150); // 100 + 50 + 0
 			expect(result.completionTokens).toBe(200);
 		});
@@ -101,6 +102,7 @@ describe("extractTokenUsage", () => {
 			const result = extractTokenUsage(data, "anthropic");
 
 			expect(result.cachedTokens).toBe(800);
+			expect(result.cacheCreationTokens).toBe(0);
 			expect(result.promptTokens).toBe(900); // 100 + 0 + 800
 		});
 

@@ -3463,6 +3463,7 @@ chat.openapi(completions, async (c) => {
 				let totalTokens = null;
 				let reasoningTokens = null;
 				let cachedTokens = null;
+				let cacheWriteTokens: number | null = null;
 				let rawCachedResponseData = ""; // Raw SSE data from cached response
 				let cachedResponseSize = 0; // Track size incrementally to avoid expensive stringify
 
@@ -3510,6 +3511,12 @@ chat.openapi(completions, async (c) => {
 							if (chunkData.usage.prompt_tokens_details?.cached_tokens) {
 								cachedTokens =
 									chunkData.usage.prompt_tokens_details.cached_tokens;
+							}
+							const chunkCacheWrite =
+								chunkData.usage.prompt_tokens_details?.cache_write_tokens ??
+								chunkData.usage.prompt_tokens_details?.cache_creation_tokens;
+							if (chunkCacheWrite !== undefined && chunkCacheWrite !== null) {
+								cacheWriteTokens = chunkCacheWrite;
 							}
 						}
 					} catch (e) {
@@ -3574,6 +3581,10 @@ chat.openapi(completions, async (c) => {
 					inputImageCount,
 					null, // webSearchCount
 					project.organizationId,
+					undefined,
+					{
+						cacheWriteTokens,
+					},
 				);
 
 				await insertLogEntry({
@@ -3597,9 +3608,7 @@ chat.openapi(completions, async (c) => {
 						: (totalTokens?.toString() ?? null),
 					reasoningTokens: reasoningTokens?.toString() ?? null,
 					cachedTokens: cachedTokens?.toString() ?? null,
-					// TODO: Extract cache write tokens from cached streaming usage chunks
-					// and pass them through cost/log handling like non-streaming cache replay.
-					cacheWriteTokens: null,
+					cacheWriteTokens: cacheWriteTokens?.toString() ?? null,
 					hasError: false,
 					streamed: true,
 					canceled: false,

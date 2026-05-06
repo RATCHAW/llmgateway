@@ -315,6 +315,7 @@ describe("parseProviderResponse", () => {
 			);
 
 			expect(result.cacheCreationTokens).toBe(1000);
+			expect(result.cacheCreation5mTokens).toBe(400);
 			expect(result.cacheCreation1hTokens).toBe(600);
 		});
 
@@ -337,6 +338,7 @@ describe("parseProviderResponse", () => {
 			);
 
 			expect(result.cacheCreationTokens).toBe(400);
+			expect(result.cacheCreation5mTokens).toBeNull();
 			expect(result.cacheCreation1hTokens).toBeNull();
 		});
 	});

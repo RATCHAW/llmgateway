@@ -46,6 +46,7 @@ export function extractTokenUsage(
 	let reasoningTokens = null;
 	let cachedTokens = null;
 	let cacheCreationTokens = null;
+	let cacheCreation5mTokens: number | null = null;
 	let cacheCreation1hTokens: number | null = null;
 
 	switch (provider) {
@@ -134,6 +135,8 @@ export function extractTokenUsage(
 					// `cache_creation_input_tokens` is the sum; the per-TTL breakdown is in
 					// `usage.cache_creation.{ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`.
 					const cacheCreation = usage.cache_creation_input_tokens ?? 0;
+					const cacheCreation5m =
+						usage.cache_creation?.ephemeral_5m_input_tokens ?? 0;
 					const cacheCreation1h =
 						usage.cache_creation?.ephemeral_1h_input_tokens ?? 0;
 					const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
@@ -143,6 +146,7 @@ export function extractTokenUsage(
 					// Cached tokens are the tokens read from cache (discount applies to these)
 					cachedTokens = cacheReadTokens;
 					cacheCreationTokens = cacheCreation;
+					cacheCreation5mTokens = cacheCreation5m > 0 ? cacheCreation5m : null;
 					cacheCreation1hTokens = cacheCreation1h > 0 ? cacheCreation1h : null;
 				}
 				completionTokens = usage.output_tokens ?? null;
@@ -180,6 +184,7 @@ export function extractTokenUsage(
 		reasoningTokens,
 		cachedTokens,
 		cacheCreationTokens,
+		cacheCreation5mTokens,
 		cacheCreation1hTokens,
 	};
 }

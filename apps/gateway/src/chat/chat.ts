@@ -899,6 +899,12 @@ const completions = createRoute({
 									cached_tokens: z.number(),
 									cache_write_tokens: z.number().optional(),
 									cache_creation_tokens: z.number().optional(),
+									cache_creation: z
+										.object({
+											ephemeral_5m_input_tokens: z.number(),
+											ephemeral_1h_input_tokens: z.number(),
+										})
+										.optional(),
 									audio_tokens: z.number().optional(),
 									video_tokens: z.number().optional(),
 								})
@@ -5705,6 +5711,7 @@ chat.openapi(completions, async (c) => {
 				let reasoningTokens = null;
 				let cachedTokens = null;
 				let cacheCreationTokens: number | null = null;
+				let cacheCreation5mTokens: number | null = null;
 				let cacheCreation1hTokens: number | null = null;
 				let streamingToolCalls = null;
 				let imageByteSize = 0; // Track total image data size for token estimation
@@ -6173,6 +6180,22 @@ chat.openapi(completions, async (c) => {
 												...(cacheCreationTokens !== null &&
 													cacheCreationTokens > 0 && {
 														cache_creation_tokens: cacheCreationTokens,
+													}),
+												...(cacheCreationTokens !== null &&
+													cacheCreationTokens > 0 &&
+													(cacheCreation5mTokens !== null ||
+														cacheCreation1hTokens !== null) && {
+														cache_creation: {
+															ephemeral_5m_input_tokens:
+																cacheCreation5mTokens ??
+																Math.max(
+																	0,
+																	cacheCreationTokens -
+																		(cacheCreation1hTokens ?? 0),
+																),
+															ephemeral_1h_input_tokens:
+																cacheCreation1hTokens ?? 0,
+														},
 													}),
 											},
 										}),
@@ -6916,6 +6939,9 @@ chat.openapi(completions, async (c) => {
 								if (usage.cacheCreationTokens !== null) {
 									cacheCreationTokens = usage.cacheCreationTokens;
 								}
+								if (usage.cacheCreation5mTokens !== null) {
+									cacheCreation5mTokens = usage.cacheCreation5mTokens;
+								}
 								if (usage.cacheCreation1hTokens !== null) {
 									cacheCreation1hTokens = usage.cacheCreation1hTokens;
 								}
@@ -7465,6 +7491,22 @@ chat.openapi(completions, async (c) => {
 												...(cacheCreationTokens !== null &&
 													cacheCreationTokens > 0 && {
 														cache_creation_tokens: cacheCreationTokens,
+													}),
+												...(cacheCreationTokens !== null &&
+													cacheCreationTokens > 0 &&
+													(cacheCreation5mTokens !== null ||
+														cacheCreation1hTokens !== null) && {
+														cache_creation: {
+															ephemeral_5m_input_tokens:
+																cacheCreation5mTokens ??
+																Math.max(
+																	0,
+																	cacheCreationTokens -
+																		(cacheCreation1hTokens ?? 0),
+																),
+															ephemeral_1h_input_tokens:
+																cacheCreation1hTokens ?? 0,
+														},
 													}),
 											},
 										}),
@@ -9264,6 +9306,7 @@ chat.openapi(completions, async (c) => {
 		reasoningTokens,
 		cachedTokens,
 		cacheCreationTokens,
+		cacheCreation5mTokens,
 		cacheCreation1hTokens,
 		imageInputTokens,
 		imageOutputTokens,
@@ -9456,6 +9499,8 @@ chat.openapi(completions, async (c) => {
 		cacheCreationTokens,
 		imageInputTokens,
 		imageOutputTokens,
+		cacheCreation5mTokens,
+		cacheCreation1hTokens,
 	);
 
 	// Extract plugin IDs for logging

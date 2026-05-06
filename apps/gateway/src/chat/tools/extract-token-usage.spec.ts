@@ -217,6 +217,7 @@ describe("extractTokenUsage", () => {
 			const result = extractTokenUsage(data, "anthropic");
 
 			expect(result.cacheCreationTokens).toBe(1000);
+			expect(result.cacheCreation5mTokens).toBe(400);
 			expect(result.cacheCreation1hTokens).toBe(600);
 		});
 
@@ -242,6 +243,7 @@ describe("extractTokenUsage", () => {
 			expect(result.promptTokens).toBe(1010);
 			expect(result.completionTokens).toBe(1);
 			expect(result.cacheCreationTokens).toBe(1000);
+			expect(result.cacheCreation5mTokens).toBe(400);
 			expect(result.cacheCreation1hTokens).toBe(600);
 		});
 
@@ -258,6 +260,7 @@ describe("extractTokenUsage", () => {
 			expect(result.promptTokens).toBeNull();
 			expect(result.cachedTokens).toBeNull();
 			expect(result.cacheCreationTokens).toBeNull();
+			expect(result.cacheCreation5mTokens).toBeNull();
 			expect(result.cacheCreation1hTokens).toBeNull();
 			expect(result.completionTokens).toBe(50);
 			expect(result.totalTokens).toBeNull();
@@ -280,6 +283,7 @@ describe("extractTokenUsage", () => {
 			const result = extractTokenUsage(data, "anthropic");
 
 			expect(result.cacheCreationTokens).toBe(400);
+			expect(result.cacheCreation5mTokens).toBe(400);
 			expect(result.cacheCreation1hTokens).toBeNull();
 		});
 

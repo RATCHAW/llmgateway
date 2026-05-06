@@ -22,6 +22,7 @@ const anthropicMessageSchema = z.object({
 					cache_control: z
 						.object({
 							type: z.enum(["ephemeral"]),
+							ttl: z.enum(["5m", "1h"]).optional(),
 						})
 						.optional(),
 				}),
@@ -100,6 +101,7 @@ const anthropicRequestSchema = z.object({
 					cache_control: z
 						.object({
 							type: z.enum(["ephemeral"]),
+							ttl: z.enum(["5m", "1h"]).optional(),
 						})
 						.optional(),
 				}),

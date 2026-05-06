@@ -1611,6 +1611,8 @@ export interface paths {
                             outputCost: number;
                             cachedTokens: number;
                             cachedCost: number;
+                            cacheWriteTokens: number;
+                            cacheWriteCost: number;
                             mostUsedModel: string | null;
                             mostUsedProvider: string | null;
                             mostUsedModelCost: number;
@@ -1934,6 +1936,8 @@ export interface paths {
                             outputCost: number;
                             cachedTokens: number;
                             cachedCost: number;
+                            cacheWriteTokens: number;
+                            cacheWriteCost: number;
                             mostUsedModel: string | null;
                             mostUsedProvider: string | null;
                             mostUsedModelCost: number;

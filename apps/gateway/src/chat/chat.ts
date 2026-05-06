@@ -3470,6 +3470,7 @@ chat.openapi(completions, async (c) => {
 				let reasoningTokens = null;
 				let cachedTokens = null;
 				let cacheWriteTokens: number | null = null;
+				let cacheWrite1hTokens: number | null = null;
 				let rawCachedResponseData = ""; // Raw SSE data from cached response
 				let cachedResponseSize = 0; // Track size incrementally to avoid expensive stringify
 
@@ -3523,6 +3524,15 @@ chat.openapi(completions, async (c) => {
 								chunkData.usage.prompt_tokens_details?.cache_creation_tokens;
 							if (chunkCacheWrite !== undefined && chunkCacheWrite !== null) {
 								cacheWriteTokens = chunkCacheWrite;
+							}
+							const chunkCacheWrite1h =
+								chunkData.usage.prompt_tokens_details?.cache_creation
+									?.ephemeral_1h_input_tokens;
+							if (
+								chunkCacheWrite1h !== undefined &&
+								chunkCacheWrite1h !== null
+							) {
+								cacheWrite1hTokens = chunkCacheWrite1h;
 							}
 						}
 					} catch (e) {
@@ -3590,6 +3600,7 @@ chat.openapi(completions, async (c) => {
 					undefined,
 					{
 						cacheWriteTokens,
+						cacheWrite1hTokens,
 					},
 				);
 
@@ -3753,6 +3764,9 @@ chat.openapi(completions, async (c) => {
 							cachedResponse.usage?.prompt_tokens_details
 								?.cache_creation_tokens ??
 							null,
+						cacheWrite1hTokens:
+							cachedResponse.usage?.prompt_tokens_details?.cache_creation
+								?.ephemeral_1h_input_tokens ?? null,
 					},
 				);
 

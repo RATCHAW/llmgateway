@@ -43,7 +43,10 @@ function normalizeAnthropicUsage(usage: any): any {
 			(cacheRead > 0 || cacheCreation > 0) && {
 				prompt_tokens_details: {
 					cached_tokens: cacheRead,
-					...(cacheCreation > 0 && { cache_creation_tokens: cacheCreation }),
+					...(cacheCreation > 0 && {
+						cache_write_tokens: cacheCreation,
+						cache_creation_tokens: cacheCreation,
+					}),
 				},
 			}),
 	};

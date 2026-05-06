@@ -62,6 +62,7 @@ describe("transformStreamingToOpenai", () => {
 				total_tokens: 1011,
 				prompt_tokens_details: {
 					cached_tokens: 0,
+					cache_write_tokens: 1000,
 					cache_creation_tokens: 1000,
 				},
 			},

@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "6b977416-2178-494d-8c8d-fe75909e664f",
+  "id": "efe567e7-e675-497d-9405-474aacdf5237",
   "prevId": "b1c22dd3-3921-4f6b-a36c-a6fbe78e5fba",
   "ddl": [
     {
@@ -5672,6 +5672,19 @@
       "generated": null,
       "identity": null,
       "name": "cache_write_input_price",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "model_provider_mapping"
+    },
+    {
+      "type": "numeric",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "cache_write_input_price1h",
       "entityType": "columns",
       "schema": "public",
       "table": "model_provider_mapping"

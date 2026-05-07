@@ -112,6 +112,44 @@ describe("calculateCosts", () => {
 		expect(result.estimatedCost).toBe(false); // Not estimated
 	});
 
+	it("does not add a separate cache write fee for OpenAI", async () => {
+		const withoutCacheWrite = await calculateCosts(
+			"gpt-4o",
+			"openai",
+			100,
+			50,
+			20,
+		);
+		const withCacheWrite = await calculateCosts(
+			"gpt-4o",
+			"openai",
+			100,
+			50,
+			20,
+			undefined,
+			null,
+			0,
+			undefined,
+			0,
+			null,
+			null,
+			undefined,
+			null,
+			null,
+			{
+				cacheWriteTokens: 30,
+			},
+		);
+
+		expect(withCacheWrite.inputCost).toBe(withoutCacheWrite.inputCost);
+		expect(withCacheWrite.cachedInputCost).toBe(
+			withoutCacheWrite.cachedInputCost,
+		);
+		expect(withCacheWrite.cacheWriteInputCost).toBe(0);
+		expect(withCacheWrite.totalCost).toBe(withoutCacheWrite.totalCost);
+		expect(withCacheWrite.cacheWriteTokens).toBe(30);
+	});
+
 	it("should calculate costs with cached tokens for Anthropic (first request - cache creation)", async () => {
 		// For Anthropic first request: 4 non-cached + 1659 cache creation = 1663 total tokens, 0 cache reads
 		const result = await calculateCosts(

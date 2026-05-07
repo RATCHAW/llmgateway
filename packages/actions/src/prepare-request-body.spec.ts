@@ -35,6 +35,43 @@ async function prepareOpenAIImageRequest(imageConfig: {
 	);
 }
 
+async function prepareOpenAITextRequest(options: {
+	provider?: "openai" | "azure";
+	model?: string;
+	useResponsesApi?: boolean;
+	promptCacheKey?: string;
+	promptCacheRetention?: "in_memory" | "24h";
+}) {
+	return await prepareRequestBody(
+		options.provider ?? "openai",
+		options.model ?? "gpt-5.5",
+		[{ role: "user", content: "Hello!" }],
+		false,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		false,
+		false,
+		20,
+		null,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		options.useResponsesApi ?? false,
+		options.promptCacheKey,
+		options.promptCacheRetention,
+	);
+}
+
 describe("prepareRequestBody - Anthropic", () => {
 	test("should extract system messages to system field for caching", async () => {
 		const requestBody = (await prepareRequestBody(
@@ -235,6 +272,69 @@ describe("prepareRequestBody - OpenAI image generation", () => {
 
 		expect(requestBody.size).toBe("1024x1024");
 		expect(requestBody.quality).toBeUndefined();
+	});
+});
+
+describe("prepareRequestBody - OpenAI prompt caching", () => {
+	test("should forward prompt cache controls to OpenAI chat completions", async () => {
+		const requestBody = (await prepareOpenAITextRequest({
+			promptCacheKey: "tenant-a",
+			promptCacheRetention: "24h",
+		})) as any;
+
+		expect(requestBody.prompt_cache_key).toBe("tenant-a");
+		expect(requestBody.prompt_cache_retention).toBe("24h");
+	});
+
+	test("should forward prompt cache controls to OpenAI Responses API", async () => {
+		const requestBody = (await prepareOpenAITextRequest({
+			useResponsesApi: true,
+			promptCacheKey: "tenant-a",
+			promptCacheRetention: "in_memory",
+		})) as any;
+
+		expect(requestBody.prompt_cache_key).toBe("tenant-a");
+		expect(requestBody.prompt_cache_retention).toBe("in_memory");
+	});
+
+	test("should not forward OpenAI prompt cache controls to Azure", async () => {
+		const requestBody = (await prepareOpenAITextRequest({
+			provider: "azure",
+			promptCacheKey: "tenant-a",
+			promptCacheRetention: "24h",
+		})) as any;
+
+		expect(requestBody.prompt_cache_key).toBeUndefined();
+		expect(requestBody.prompt_cache_retention).toBeUndefined();
+	});
+
+	test("should strip prompt_cache_retention=24h on models that don't support extended retention", async () => {
+		const requestBody = (await prepareOpenAITextRequest({
+			model: "gpt-4o",
+			promptCacheKey: "tenant-a",
+			promptCacheRetention: "24h",
+		})) as any;
+
+		expect(requestBody.prompt_cache_key).toBe("tenant-a");
+		expect(requestBody.prompt_cache_retention).toBeUndefined();
+	});
+
+	test("should still forward prompt_cache_retention=in_memory on models without 24h support", async () => {
+		const requestBody = (await prepareOpenAITextRequest({
+			model: "gpt-4o",
+			promptCacheRetention: "in_memory",
+		})) as any;
+
+		expect(requestBody.prompt_cache_retention).toBe("in_memory");
+	});
+
+	test("should forward prompt_cache_retention=24h on models that do support extended retention", async () => {
+		const requestBody = (await prepareOpenAITextRequest({
+			model: "gpt-4.1",
+			promptCacheRetention: "24h",
+		})) as any;
+
+		expect(requestBody.prompt_cache_retention).toBe("24h");
 	});
 });
 

@@ -10,7 +10,9 @@ import {
 	type OpenAIRequestBody,
 	type OpenAIResponsesRequestBody,
 	type OpenAIToolInput,
+	type PromptCacheRetention,
 	type ProviderRequestBody,
+	supportsOpenAIExtendedPromptCache,
 	type ToolChoiceType,
 	type WebSearchTool,
 } from "@llmgateway/models";
@@ -653,6 +655,8 @@ export async function prepareRequestBody(
 	webSearchTool?: WebSearchTool,
 	reasoning_max_tokens?: number,
 	useResponsesApi?: boolean,
+	prompt_cache_key?: string,
+	prompt_cache_retention?: PromptCacheRetention,
 ): Promise<ProviderRequestBody | FormData> {
 	// Handle OpenAI / Azure image generation models (e.g. gpt-image-2)
 	if (
@@ -1123,6 +1127,19 @@ export async function prepareRequestBody(
 					},
 				};
 
+				if (usedProvider === "openai") {
+					if (prompt_cache_key !== undefined) {
+						responsesBody.prompt_cache_key = prompt_cache_key;
+					}
+					if (
+						prompt_cache_retention !== undefined &&
+						(prompt_cache_retention !== "24h" ||
+							supportsOpenAIExtendedPromptCache(usedModel))
+					) {
+						responsesBody.prompt_cache_retention = prompt_cache_retention;
+					}
+				}
+
 				// Add streaming support
 				if (stream) {
 					responsesBody.stream = true;
@@ -1194,6 +1211,19 @@ export async function prepareRequestBody(
 				return responsesBody;
 			} else {
 				// Use regular chat completions format
+				if (usedProvider === "openai") {
+					if (prompt_cache_key !== undefined) {
+						requestBody.prompt_cache_key = prompt_cache_key;
+					}
+					if (
+						prompt_cache_retention !== undefined &&
+						(prompt_cache_retention !== "24h" ||
+							supportsOpenAIExtendedPromptCache(usedModel))
+					) {
+						requestBody.prompt_cache_retention = prompt_cache_retention;
+					}
+				}
+
 				if (stream) {
 					requestBody.stream_options = {
 						include_usage: true,

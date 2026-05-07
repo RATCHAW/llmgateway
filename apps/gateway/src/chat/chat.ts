@@ -1032,6 +1032,8 @@ chat.openapi(completions, async (c) => {
 		model: modelInput,
 		response_format,
 		stream,
+		prompt_cache_key,
+		prompt_cache_retention,
 		tool_choice,
 		free_models_only,
 		onboarding,
@@ -3502,6 +3504,8 @@ chat.openapi(completions, async (c) => {
 			response_format,
 			reasoning_effort,
 			reasoning_max_tokens,
+			prompt_cache_key,
+			prompt_cache_retention,
 		};
 
 		if (stream) {
@@ -4088,6 +4092,8 @@ chat.openapi(completions, async (c) => {
 		webSearchTool,
 		reasoning_max_tokens,
 		useResponsesApi,
+		prompt_cache_key,
+		prompt_cache_retention,
 	);
 
 	if (forceImageStreamUpstream) {
@@ -4215,6 +4221,8 @@ chat.openapi(completions, async (c) => {
 				tool_choice,
 				reasoning_effort,
 				reasoning_max_tokens,
+				prompt_cache_key,
+				prompt_cache_retention,
 				effort,
 				webSearchTool,
 				image_config,

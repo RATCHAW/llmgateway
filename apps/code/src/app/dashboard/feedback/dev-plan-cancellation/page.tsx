@@ -13,7 +13,6 @@ interface EligibilityResponse {
 	eligible: boolean;
 	subscriptionId: string | null;
 	previousDevPlan: PreviousDevPlan;
-	cancelledAt: string | null;
 	existingFeedback: ExistingFeedback | null;
 }
 

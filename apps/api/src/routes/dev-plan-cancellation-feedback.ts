@@ -29,7 +29,6 @@ const eligibilitySchema = z.object({
 	eligible: z.boolean(),
 	subscriptionId: z.string().nullable(),
 	previousDevPlan: z.enum(["lite", "pro", "max"]).nullable(),
-	cancelledAt: z.string().nullable(),
 	existingFeedback: z
 		.object({
 			reason: reasonEnum,
@@ -66,7 +65,6 @@ devPlanCancellationFeedback.openapi(getEligibility, async (c) => {
 			eligible: false,
 			subscriptionId: null,
 			previousDevPlan: null,
-			cancelledAt: null,
 			existingFeedback: null,
 		});
 	}
@@ -77,7 +75,6 @@ devPlanCancellationFeedback.openapi(getEligibility, async (c) => {
 			eligible: false,
 			subscriptionId: null,
 			previousDevPlan: null,
-			cancelledAt: null,
 			existingFeedback: null,
 		});
 	}
@@ -100,7 +97,6 @@ devPlanCancellationFeedback.openapi(getEligibility, async (c) => {
 		eligible: true,
 		subscriptionId,
 		previousDevPlan,
-		cancelledAt: personalOrg.devPlanExpiresAt?.toISOString() ?? null,
 		existingFeedback: existing
 			? {
 					reason: existing.reason,

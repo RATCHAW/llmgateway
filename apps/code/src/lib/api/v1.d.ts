@@ -7894,7 +7894,6 @@ export interface paths {
                             subscriptionId: string | null;
                             /** @enum {string|null} */
                             previousDevPlan: "lite" | "pro" | "max" | null;
-                            cancelledAt: string | null;
                             existingFeedback: {
                                 /** @enum {string} */
                                 reason: "too_expensive" | "missing_features" | "not_using_enough" | "switched_alternative" | "other";

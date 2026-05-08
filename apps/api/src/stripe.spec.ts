@@ -34,6 +34,7 @@ const SECONDS_IN_TWO_WEEKS = 1209600;
 function makeUpdatedEvent(overrides: {
 	cancelAtPeriodEnd: boolean;
 	status?: Stripe.Subscription.Status;
+	metadata?: Record<string, string>;
 }): Stripe.CustomerSubscriptionUpdatedEvent {
 	return {
 		id: "evt_test_updated",
@@ -45,7 +46,7 @@ function makeUpdatedEvent(overrides: {
 				cancel_at_period_end: overrides.cancelAtPeriodEnd,
 				status: overrides.status ?? "active",
 				latest_invoice: "in_test_001",
-				metadata: {
+				metadata: overrides.metadata ?? {
 					organizationId: ORG_ID,
 					subscriptionType: "dev_plan",
 				},
@@ -142,8 +143,10 @@ describe("handleSubscriptionUpdated — dev plan cancellation feedback email", (
 			subscriptionCancelled: false,
 		});
 
-		const event = makeUpdatedEvent({ cancelAtPeriodEnd: true });
-		(event.data.object as any).metadata = { organizationId: ORG_ID };
+		const event = makeUpdatedEvent({
+			cancelAtPeriodEnd: true,
+			metadata: { organizationId: ORG_ID },
+		});
 
 		await handleSubscriptionUpdated(event);
 

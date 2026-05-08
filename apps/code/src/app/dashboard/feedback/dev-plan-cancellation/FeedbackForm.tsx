@@ -3,6 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { usePostHog } from "posthog-js/react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod/v3";
@@ -18,6 +19,7 @@ import {
 } from "@/components/ui/form";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
+import { useAppConfig } from "@/lib/config";
 import { useApi } from "@/lib/fetch-client";
 import { cn } from "@/lib/utils";
 
@@ -85,6 +87,8 @@ export default function FeedbackForm({
 }) {
 	const api = useApi();
 	const router = useRouter();
+	const posthog = usePostHog();
+	const { posthogKey } = useAppConfig();
 
 	const submitMutation = api.useMutation(
 		"post",
@@ -103,13 +107,22 @@ export default function FeedbackForm({
 	const comments = form.watch("comments");
 
 	async function onSubmit(values: FormValues) {
+		const trimmedComments = values.comments.trim();
 		try {
 			await submitMutation.mutateAsync({
 				body: {
 					reason: values.reason,
-					comments: values.comments.trim() || undefined,
+					comments: trimmedComments || undefined,
 				},
 			});
+			if (posthogKey) {
+				posthog.capture("dev_plan_cancellation_feedback_submitted", {
+					reason: values.reason,
+					previous_dev_plan: previousDevPlan,
+					has_comments: trimmedComments.length > 0,
+					is_update: isUpdating,
+				});
+			}
 			toast.success("Thanks for the feedback!");
 			router.push("/dashboard");
 		} catch {

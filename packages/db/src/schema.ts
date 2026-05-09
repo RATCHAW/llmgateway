@@ -989,6 +989,35 @@ export const chat = pgTable(
 	(table) => [index("chat_user_id_idx").on(table.userId)],
 );
 
+export const chatShare = pgTable(
+	"chat_share",
+	{
+		id: text().primaryKey().$defaultFn(shortid),
+		createdAt: timestamp().notNull().defaultNow(),
+		updatedAt: timestamp()
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date()),
+		deletedAt: timestamp(),
+		chatId: text()
+			.notNull()
+			.references(() => chat.id, { onDelete: "cascade" }),
+		userId: text()
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		title: text().notNull(),
+		model: text().notNull(),
+		messages: jsonb().notNull(),
+	},
+	(table) => [
+		uniqueIndex("chat_share_active_chat_id_unique")
+			.on(table.chatId)
+			.where(sql`${table.deletedAt} IS NULL`),
+		index("chat_share_chat_id_idx").on(table.chatId),
+		index("chat_share_deleted_at_idx").on(table.deletedAt),
+	],
+);
+
 export const message = pgTable(
 	"message",
 	{

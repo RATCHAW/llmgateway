@@ -1090,6 +1090,8 @@ export default function ChatPageClient({
 								isLoading || status === "submitted" || status === "streaming"
 							}
 							hasTemporaryMessages={hasTemporaryMessages}
+							currentChatId={currentChatId}
+							shareId={currentChatData?.chat?.shareId ?? null}
 						/>
 					</header>
 					{comparisonEnabled && !isTemporaryChat ? (

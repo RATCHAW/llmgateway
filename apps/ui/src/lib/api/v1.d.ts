@@ -1014,8 +1014,10 @@ export interface paths {
                                 cacheWriteInputCost?: number | null;
                                 webSearchCost?: number | null;
                                 imageInputTokens: string | null;
+                                audioInputTokens: string | null;
                                 imageOutputTokens: string | null;
                                 imageInputCost: number | null;
+                                audioInputCost: number | null;
                                 imageOutputCost: number | null;
                                 videoOutputCost: number | null;
                                 videoDownloadCount: number | null;
@@ -1264,8 +1266,10 @@ export interface paths {
                                 cacheWriteInputCost?: number | null;
                                 webSearchCost?: number | null;
                                 imageInputTokens: string | null;
+                                audioInputTokens: string | null;
                                 imageOutputTokens: string | null;
                                 imageInputCost: number | null;
+                                audioInputCost: number | null;
                                 imageOutputCost: number | null;
                                 videoOutputCost: number | null;
                                 videoDownloadCount: number | null;
@@ -1399,6 +1403,7 @@ export interface paths {
                                 requestCost: number;
                                 dataStorageCost: number;
                                 imageInputCost: number;
+                                audioInputCost: number;
                                 imageOutputCost: number;
                                 videoOutputCost: number;
                                 cachedInputCost: number;

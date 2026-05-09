@@ -1819,7 +1819,6 @@ export const googleModels = [
 				maxOutput: undefined,
 				streaming: true,
 				vision: false,
-				audio: true,
 				tools: true,
 				stability: "unstable",
 				jsonOutput: false,

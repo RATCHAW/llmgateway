@@ -9,7 +9,6 @@ import {
 	beforeAllHook,
 	beforeEachHook,
 	filteredModels,
-	getConcurrentTestOptions,
 	getTestOptions,
 	hasOnlyModels,
 	logMode,
@@ -111,7 +110,7 @@ async function audioBeforeAllHook() {
 		.onConflictDoNothing();
 }
 
-describe("e2e audio input", getConcurrentTestOptions(), () => {
+describe("e2e audio input", getTestOptions(), () => {
 	beforeAll(audioBeforeAllHook);
 	beforeEach(beforeEachHook);
 

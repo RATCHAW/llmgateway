@@ -1697,7 +1697,7 @@ chat.openapi(completions, async (c) => {
 				if (!("free" in modelDef && modelDef.free)) {
 					continue;
 				}
-			} else if (!allowedAutoModels.includes(modelDef.id)) {
+			} else if (!allowedAutoModels.includes(modelDef.id) && !hasAudio) {
 				continue;
 			} else if (
 				estimatedInputTokens > 10_000 &&
@@ -1985,13 +1985,28 @@ chat.openapi(completions, async (c) => {
 		const allSameProviderMappings = modelInfo.providers.filter(
 			(p) => p.providerId === usedProvider,
 		);
-		const sameProviderMappings = isDevPlanRestricted
+		let sameProviderMappings = isDevPlanRestricted
 			? allSameProviderMappings.filter(providerSupportsCachedInput)
 			: allSameProviderMappings;
 		if (isDevPlanRestricted && sameProviderMappings.length === 0) {
 			throw new HTTPException(403, {
 				message: `Provider ${usedProvider} does not offer cached input pricing for model ${modelInfo.id}. Coding plans require providers with prompt caching support; choose another provider or enable access to all models in your dashboard settings at code.llmgateway.io/dashboard.`,
 			});
+		}
+		if (hasAudio) {
+			sameProviderMappings = sameProviderMappings.filter(
+				(p) =>
+					p.audio === true &&
+					(audioFormats.length === 0 ||
+						audioFormats.every((fmt) =>
+							googleProviderSupportsAudioFormat(p.providerId, fmt),
+						)),
+			);
+			if (sameProviderMappings.length === 0) {
+				throw new HTTPException(400, {
+					message: `Provider ${usedProvider} does not support audio input for model ${modelInfo.id}.`,
+				});
+			}
 		}
 		const sameProviderRegionalMappings = sameProviderMappings.filter(
 			(p) => p.region,
@@ -3585,6 +3600,7 @@ chat.openapi(completions, async (c) => {
 				let cachedTokens = null;
 				let cacheWriteTokens: number | null = null;
 				let cacheWrite1hTokens: number | null = null;
+				let audioInputTokens: number | null = null;
 				let rawCachedResponseData = ""; // Raw SSE data from cached response
 				let cachedResponseSize = 0; // Track size incrementally to avoid expensive stringify
 
@@ -3647,6 +3663,11 @@ chat.openapi(completions, async (c) => {
 								chunkCacheWrite1h !== null
 							) {
 								cacheWrite1hTokens = chunkCacheWrite1h;
+							}
+							const chunkAudioTokens =
+								chunkData.usage.prompt_tokens_details?.audio_tokens;
+							if (chunkAudioTokens !== undefined && chunkAudioTokens !== null) {
+								audioInputTokens = chunkAudioTokens;
 							}
 						}
 					} catch (e) {
@@ -3717,6 +3738,7 @@ chat.openapi(completions, async (c) => {
 					{
 						cacheWriteTokens,
 						cacheWrite1hTokens,
+						audioInputTokens,
 					},
 				);
 
@@ -3887,6 +3909,8 @@ chat.openapi(completions, async (c) => {
 						cacheWrite1hTokens:
 							cachedResponse.usage?.prompt_tokens_details?.cache_creation
 								?.ephemeral_1h_input_tokens ?? null,
+						audioInputTokens:
+							cachedResponse.usage?.prompt_tokens_details?.audio_tokens ?? null,
 					},
 				);
 

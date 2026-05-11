@@ -353,6 +353,14 @@ export default function ChatPageClient({
 		return !!model?.vision;
 	}, [availableModels, selectedModel]);
 
+	const supportsAudio = useMemo(() => {
+		let model = availableModels.find((m) => m.id === selectedModel);
+		if (!model && !selectedModel.includes("/")) {
+			model = availableModels.find((m) => m.id.endsWith(`/${selectedModel}`));
+		}
+		return !!model?.audio;
+	}, [availableModels, selectedModel]);
+
 	const supportsImageGen = useMemo(() => {
 		let model = availableModels.find((m) => m.id === selectedModel);
 		if (!model && !selectedModel.includes("/")) {
@@ -1147,6 +1155,7 @@ export default function ChatPageClient({
 										<ChatUI
 											messages={messages}
 											supportsImages={supportsImages}
+											supportsAudio={supportsAudio}
 											supportsImageGen={supportsImageGen}
 											sendMessage={sendMessageWithHeaders}
 											selectedModel={selectedModel}
@@ -1184,6 +1193,7 @@ export default function ChatPageClient({
 									<ChatUI
 										messages={messages}
 										supportsImages={supportsImages}
+										supportsAudio={supportsAudio}
 										supportsImageGen={supportsImageGen}
 										sendMessage={sendMessageWithHeaders}
 										selectedModel={selectedModel}
@@ -1332,6 +1342,14 @@ function ExtraChatPanel({
 			model = availableModels.find((m) => m.id.endsWith(`/${selectedModel}`));
 		}
 		return !!model?.imageGen;
+	}, [availableModels, selectedModel]);
+
+	const supportsAudio = useMemo(() => {
+		let model = availableModels.find((m) => m.id === selectedModel);
+		if (!model && !selectedModel.includes("/")) {
+			model = availableModels.find((m) => m.id.endsWith(`/${selectedModel}`));
+		}
+		return !!model?.audio;
 	}, [availableModels, selectedModel]);
 
 	const supportsReasoning = useMemo(() => {
@@ -1570,6 +1588,7 @@ function ExtraChatPanel({
 				<ChatUI
 					messages={messages}
 					supportsImages={supportsImages}
+					supportsAudio={supportsAudio}
 					supportsImageGen={supportsImageGen}
 					sendMessage={sendMessageWithHeaders}
 					selectedModel={selectedModel}

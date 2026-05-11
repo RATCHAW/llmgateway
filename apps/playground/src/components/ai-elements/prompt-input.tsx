@@ -250,14 +250,22 @@ export function PromptInputAttachment({
 	const attachments = usePromptInputAttachments();
 
 	const mediaType =
-		data.mediaType?.startsWith("image/") && data.url ? "image" : "file";
+		data.mediaType?.startsWith("image/") && data.url
+			? "image"
+			: data.mediaType?.startsWith("audio/") && data.url
+				? "audio"
+				: "file";
 
 	return (
 		<div
 			className={cn(
-				"group relative h-14 w-14 rounded-md border",
+				"group relative rounded-md border",
 				className,
-				mediaType === "image" ? "h-14 w-14" : "h-8 w-auto max-w-full",
+				mediaType === "image"
+					? "h-14 w-14"
+					: mediaType === "audio"
+						? "h-10 w-auto max-w-[280px]"
+						: "h-8 w-auto max-w-full",
 			)}
 			key={data.id}
 			{...props}
@@ -270,6 +278,15 @@ export function PromptInputAttachment({
 					src={data.url}
 					width={56}
 				/>
+			) : mediaType === "audio" ? (
+				<audio
+					controls
+					src={data.url}
+					className="h-full w-full rounded-md"
+					aria-label={data.filename ?? "audio attachment"}
+				>
+					<track kind="captions" />
+				</audio>
 			) : (
 				<div className="flex size-full max-w-full cursor-pointer items-center justify-start gap-2 overflow-hidden px-2 text-muted-foreground">
 					<PaperclipIcon className="size-4 shrink-0" />
@@ -473,11 +490,23 @@ export const PromptInput = ({
 			if (!accept || accept.trim() === "") {
 				return true;
 			}
-			if (accept.includes("image/*")) {
-				return f.type.startsWith("image/");
+			const patterns = accept
+				.split(",")
+				.map((p) => p.trim())
+				.filter(Boolean);
+			if (patterns.length === 0) {
+				return true;
 			}
-			// NOTE: keep simple; expand as needed
-			return true;
+			return patterns.some((pattern) => {
+				if (pattern.endsWith("/*")) {
+					const prefix = pattern.slice(0, -1);
+					return f.type.startsWith(prefix);
+				}
+				if (pattern.startsWith(".")) {
+					return f.name.toLowerCase().endsWith(pattern.toLowerCase());
+				}
+				return f.type === pattern;
+			});
 		},
 		[accept],
 	);

@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "71ca2c62-b62b-4a26-8717-f08cc94f0aec",
+  "id": "75542202-2d45-438f-8dd1-2fa2ac68f7d6",
   "prevId": "aeb982d7-a1fb-4a61-a179-fbef02d1dd3c",
   "ddl": [
     {
@@ -43,6 +43,12 @@
     {
       "isRlsEnabled": false,
       "name": "chat",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "chat_share",
       "entityType": "tables",
       "schema": "public"
     },
@@ -1240,22 +1246,6 @@
       },
       "generated": null,
       "identity": null,
-      "name": "audio_input_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "api_key_hourly_model_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
       "name": "video_output_cost",
       "entityType": "columns",
       "schema": "public",
@@ -1932,22 +1922,6 @@
       },
       "generated": null,
       "identity": null,
-      "name": "audio_input_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "api_key_hourly_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
       "name": "video_output_cost",
       "entityType": "columns",
       "schema": "public",
@@ -2403,6 +2377,129 @@
       "entityType": "columns",
       "schema": "public",
       "table": "chat"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": {
+        "value": "now()",
+        "type": "unknown"
+      },
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": {
+        "value": "now()",
+        "type": "unknown"
+      },
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "deleted_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "chat_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "title",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "model",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "messages",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "chat_share"
     },
     {
       "type": "text",
@@ -3814,22 +3911,6 @@
       },
       "generated": null,
       "identity": null,
-      "name": "audio_input_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "global_model_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
       "name": "video_output_cost",
       "entityType": "columns",
       "schema": "public",
@@ -4478,22 +4559,6 @@
       "generated": null,
       "identity": null,
       "name": "image_output_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "global_source_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
-      "name": "audio_input_cost",
       "entityType": "columns",
       "schema": "public",
       "table": "global_source_stats"
@@ -5907,32 +5972,6 @@
       "generated": null,
       "identity": null,
       "name": "image_output_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "log"
-    },
-    {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "audio_input_tokens",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "log"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "audio_input_cost",
       "entityType": "columns",
       "schema": "public",
       "table": "log"
@@ -9897,22 +9936,6 @@
       },
       "generated": null,
       "identity": null,
-      "name": "audio_input_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "project_hourly_model_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
       "name": "video_output_cost",
       "entityType": "columns",
       "schema": "public",
@@ -10561,22 +10584,6 @@
       "generated": null,
       "identity": null,
       "name": "image_output_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "project_hourly_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
-      "name": "audio_input_cost",
       "entityType": "columns",
       "schema": "public",
       "table": "project_hourly_stats"
@@ -12762,6 +12769,27 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "chat_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"deleted_at\" IS NULL",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "chat_share_active_chat_id_unique",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "user_id",
           "isExpression": false,
           "asc": true,
@@ -13156,6 +13184,48 @@
       "entityType": "indexes",
       "schema": "public",
       "table": "chat"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "chat_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "chat_share_chat_id_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "deleted_at",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "chat_share_deleted_at_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "chat_share"
     },
     {
       "nameExplicit": true,
@@ -14896,6 +14966,40 @@
     {
       "nameExplicit": false,
       "columns": [
+        "chat_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "chat",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "chat_share_chat_id_chat_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "user_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "user",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "chat_share_user_id_user_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "chat_share"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
         "conversation_id"
       ],
       "schemaTo": "public",
@@ -15471,6 +15575,16 @@
       "name": "chat_pkey",
       "schema": "public",
       "table": "chat",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "chat_share_pkey",
+      "schema": "public",
+      "table": "chat_share",
       "entityType": "pks"
     },
     {

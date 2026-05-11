@@ -1,6 +1,9 @@
+"use client";
+
 import { ThemeToggle } from "@/components/landing/theme-toggle";
 import { ModelSelector } from "@/components/model-selector";
 import { McpServersDialog } from "@/components/playground/mcp-servers-dialog";
+import { ShareChatDialog } from "@/components/playground/share-chat-dialog";
 import { TempChatSwitcher } from "@/components/playground/temp-chat-switcher";
 import { Label } from "@/components/ui/label";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -31,6 +34,10 @@ interface ChatHeaderProps {
 	onToggleTemporaryChat: () => void;
 	isTemporaryChatToggleDisabled: boolean;
 	hasTemporaryMessages: boolean;
+	currentChatId: string | null;
+	shareId: string | null;
+	chatTitle?: string | null;
+	previewPrompt?: string | null;
 }
 
 export const ChatHeader = ({
@@ -50,6 +57,10 @@ export const ChatHeader = ({
 	onToggleTemporaryChat,
 	isTemporaryChatToggleDisabled,
 	hasTemporaryMessages,
+	currentChatId,
+	shareId,
+	chatTitle,
+	previewPrompt,
 }: ChatHeaderProps) => {
 	return (
 		<header className="bg-background flex items-center border-b p-4">
@@ -74,6 +85,14 @@ export const ChatHeader = ({
 					isTemporaryChatToggleDisabled={isTemporaryChatToggleDisabled}
 					hasTemporaryMessages={hasTemporaryMessages}
 				/>
+				{isTemporaryChat || !currentChatId ? null : (
+					<ShareChatDialog
+						currentChatId={currentChatId}
+						shareId={shareId}
+						chatTitle={chatTitle}
+						previewPrompt={previewPrompt}
+					/>
+				)}
 				<TooltipProvider>
 					<McpServersDialog
 						servers={mcpServers}

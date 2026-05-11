@@ -7,6 +7,7 @@ import { adminMiddleware } from "@/middleware/admin.js";
 
 import { logAuditEvent } from "@llmgateway/audit";
 import {
+	aliasedTable,
 	and,
 	asc,
 	db,
@@ -3978,6 +3979,12 @@ const modelDetailSchema = z.object({
 		clientErrorsCount: z.number(),
 		gatewayErrorsCount: z.number(),
 		upstreamErrorsCount: z.number(),
+		completedCount: z.number(),
+		lengthLimitCount: z.number(),
+		contentFilterCount: z.number(),
+		toolCallsCount: z.number(),
+		canceledCount: z.number(),
+		unknownFinishCount: z.number(),
 		cachedCount: z.number(),
 		avgTimeToFirstToken: z.number().nullable(),
 		providerCount: z.number(),
@@ -4034,6 +4041,42 @@ admin.openapi(getModelDetail, async (c) => {
 				errorsCount: sql<number>`SUM(${projectHourlyModelStats.errorCount})`.as(
 					"errors_count",
 				),
+				clientErrorsCount:
+					sql<number>`SUM(${projectHourlyModelStats.clientErrorCount})`.as(
+						"client_errors_count",
+					),
+				gatewayErrorsCount:
+					sql<number>`SUM(${projectHourlyModelStats.gatewayErrorCount})`.as(
+						"gateway_errors_count",
+					),
+				upstreamErrorsCount:
+					sql<number>`SUM(${projectHourlyModelStats.upstreamErrorCount})`.as(
+						"upstream_errors_count",
+					),
+				completedCount:
+					sql<number>`SUM(${projectHourlyModelStats.completedCount})`.as(
+						"completed_count",
+					),
+				lengthLimitCount:
+					sql<number>`SUM(${projectHourlyModelStats.lengthLimitCount})`.as(
+						"length_limit_count",
+					),
+				contentFilterCount:
+					sql<number>`SUM(${projectHourlyModelStats.contentFilterCount})`.as(
+						"content_filter_count",
+					),
+				toolCallsCount:
+					sql<number>`SUM(${projectHourlyModelStats.toolCallsCount})`.as(
+						"tool_calls_count",
+					),
+				canceledCount:
+					sql<number>`SUM(${projectHourlyModelStats.canceledCount})`.as(
+						"canceled_count",
+					),
+				unknownFinishCount:
+					sql<number>`SUM(${projectHourlyModelStats.unknownFinishCount})`.as(
+						"unknown_finish_count",
+					),
 				cachedCount: sql<number>`SUM(${projectHourlyModelStats.cacheCount})`.as(
 					"cached_count",
 				),
@@ -4062,6 +4105,42 @@ admin.openapi(getModelDetail, async (c) => {
 			(s, r) => s + Number(r.errorsCount),
 			0,
 		);
+		const totalClientErrors = statsRows.reduce(
+			(s, r) => s + Number(r.clientErrorsCount),
+			0,
+		);
+		const totalGatewayErrors = statsRows.reduce(
+			(s, r) => s + Number(r.gatewayErrorsCount),
+			0,
+		);
+		const totalUpstreamErrors = statsRows.reduce(
+			(s, r) => s + Number(r.upstreamErrorsCount),
+			0,
+		);
+		const totalCompleted = statsRows.reduce(
+			(s, r) => s + Number(r.completedCount),
+			0,
+		);
+		const totalLengthLimit = statsRows.reduce(
+			(s, r) => s + Number(r.lengthLimitCount),
+			0,
+		);
+		const totalContentFilter = statsRows.reduce(
+			(s, r) => s + Number(r.contentFilterCount),
+			0,
+		);
+		const totalToolCalls = statsRows.reduce(
+			(s, r) => s + Number(r.toolCallsCount),
+			0,
+		);
+		const totalCanceled = statsRows.reduce(
+			(s, r) => s + Number(r.canceledCount),
+			0,
+		);
+		const totalUnknownFinish = statsRows.reduce(
+			(s, r) => s + Number(r.unknownFinishCount),
+			0,
+		);
 		const totalCached = statsRows.reduce(
 			(s, r) => s + Number(r.cachedCount),
 			0,
@@ -4077,9 +4156,15 @@ admin.openapi(getModelDetail, async (c) => {
 				status: model.status,
 				logsCount: totalLogs,
 				errorsCount: totalErrors,
-				clientErrorsCount: 0,
-				gatewayErrorsCount: 0,
-				upstreamErrorsCount: 0,
+				clientErrorsCount: totalClientErrors,
+				gatewayErrorsCount: totalGatewayErrors,
+				upstreamErrorsCount: totalUpstreamErrors,
+				completedCount: totalCompleted,
+				lengthLimitCount: totalLengthLimit,
+				contentFilterCount: totalContentFilter,
+				toolCallsCount: totalToolCalls,
+				canceledCount: totalCanceled,
+				unknownFinishCount: totalUnknownFinish,
 				cachedCount: totalCached,
 				avgTimeToFirstToken: null,
 				providerCount: statsRows.length,
@@ -4129,6 +4214,30 @@ admin.openapi(getModelDetail, async (c) => {
 				upstreamErrorsCount:
 					sql<number>`COALESCE(SUM(${modelProviderMappingHistory.upstreamErrorsCount}), 0)`.as(
 						"upstream_errors_count",
+					),
+				completedCount:
+					sql<number>`COALESCE(SUM(${modelProviderMappingHistory.completedCount}), 0)`.as(
+						"completed_count",
+					),
+				lengthLimitCount:
+					sql<number>`COALESCE(SUM(${modelProviderMappingHistory.lengthLimitCount}), 0)`.as(
+						"length_limit_count",
+					),
+				contentFilterCount:
+					sql<number>`COALESCE(SUM(${modelProviderMappingHistory.contentFilterCount}), 0)`.as(
+						"content_filter_count",
+					),
+				toolCallsCount:
+					sql<number>`COALESCE(SUM(${modelProviderMappingHistory.toolCallsCount}), 0)`.as(
+						"tool_calls_count",
+					),
+				canceledCount:
+					sql<number>`COALESCE(SUM(${modelProviderMappingHistory.canceledCount}), 0)`.as(
+						"canceled_count",
+					),
+				unknownFinishCount:
+					sql<number>`COALESCE(SUM(${modelProviderMappingHistory.unknownFinishCount}), 0)`.as(
+						"unknown_finish_count",
 					),
 				cachedCount:
 					sql<number>`COALESCE(SUM(${modelProviderMappingHistory.cachedCount}), 0)`.as(
@@ -4196,6 +4305,12 @@ admin.openapi(getModelDetail, async (c) => {
 			acc.clientErrorsCount += Number(r.clientErrorsCount ?? 0);
 			acc.gatewayErrorsCount += Number(r.gatewayErrorsCount ?? 0);
 			acc.upstreamErrorsCount += Number(r.upstreamErrorsCount ?? 0);
+			acc.completedCount += Number(r.completedCount ?? 0);
+			acc.lengthLimitCount += Number(r.lengthLimitCount ?? 0);
+			acc.contentFilterCount += Number(r.contentFilterCount ?? 0);
+			acc.toolCallsCount += Number(r.toolCallsCount ?? 0);
+			acc.canceledCount += Number(r.canceledCount ?? 0);
+			acc.unknownFinishCount += Number(r.unknownFinishCount ?? 0);
 			acc.cachedCount += Number(r.cachedCount ?? 0);
 			acc.totalTtft += Number(r.totalTtft ?? 0);
 			return acc;
@@ -4206,6 +4321,12 @@ admin.openapi(getModelDetail, async (c) => {
 			clientErrorsCount: 0,
 			gatewayErrorsCount: 0,
 			upstreamErrorsCount: 0,
+			completedCount: 0,
+			lengthLimitCount: 0,
+			contentFilterCount: 0,
+			toolCallsCount: 0,
+			canceledCount: 0,
+			unknownFinishCount: 0,
 			cachedCount: 0,
 			totalTtft: 0,
 		},
@@ -4233,6 +4354,12 @@ admin.openapi(getModelDetail, async (c) => {
 			upstreamErrorsCount: hasWindowData
 				? agg.upstreamErrorsCount
 				: model.upstreamErrorsCount,
+			completedCount: agg.completedCount,
+			lengthLimitCount: agg.lengthLimitCount,
+			contentFilterCount: agg.contentFilterCount,
+			toolCallsCount: agg.toolCallsCount,
+			canceledCount: agg.canceledCount,
+			unknownFinishCount: agg.unknownFinishCount,
 			cachedCount: hasWindowData ? agg.cachedCount : model.cachedCount,
 			avgTimeToFirstToken: hasWindowData
 				? (aggAvgTtft ?? model.avgTimeToFirstToken)
@@ -5364,6 +5491,12 @@ const mappingDetailSchema = z.object({
 		clientErrorsCount: z.number(),
 		gatewayErrorsCount: z.number(),
 		upstreamErrorsCount: z.number(),
+		completedCount: z.number(),
+		lengthLimitCount: z.number(),
+		contentFilterCount: z.number(),
+		toolCallsCount: z.number(),
+		canceledCount: z.number(),
+		unknownFinishCount: z.number(),
 		cachedCount: z.number(),
 		avgTimeToFirstToken: z.number().nullable(),
 		updatedAt: z.string(),
@@ -5468,6 +5601,30 @@ admin.openapi(getMappingDetail, async (c) => {
 				sql<number>`COALESCE(SUM(${modelProviderMappingHistory.upstreamErrorsCount}), 0)`.as(
 					"upstream_errors_count",
 				),
+			completedCount:
+				sql<number>`COALESCE(SUM(${modelProviderMappingHistory.completedCount}), 0)`.as(
+					"completed_count",
+				),
+			lengthLimitCount:
+				sql<number>`COALESCE(SUM(${modelProviderMappingHistory.lengthLimitCount}), 0)`.as(
+					"length_limit_count",
+				),
+			contentFilterCount:
+				sql<number>`COALESCE(SUM(${modelProviderMappingHistory.contentFilterCount}), 0)`.as(
+					"content_filter_count",
+				),
+			toolCallsCount:
+				sql<number>`COALESCE(SUM(${modelProviderMappingHistory.toolCallsCount}), 0)`.as(
+					"tool_calls_count",
+				),
+			canceledCount:
+				sql<number>`COALESCE(SUM(${modelProviderMappingHistory.canceledCount}), 0)`.as(
+					"canceled_count",
+				),
+			unknownFinishCount:
+				sql<number>`COALESCE(SUM(${modelProviderMappingHistory.unknownFinishCount}), 0)`.as(
+					"unknown_finish_count",
+				),
 			cachedCount:
 				sql<number>`COALESCE(SUM(${modelProviderMappingHistory.cachedCount}), 0)`.as(
 					"cached_count",
@@ -5520,6 +5677,12 @@ admin.openapi(getMappingDetail, async (c) => {
 			upstreamErrorsCount: hasWindowData
 				? Number(aggRow?.upstreamErrorsCount ?? 0)
 				: m.upstreamErrorsCount,
+			completedCount: Number(aggRow?.completedCount ?? 0),
+			lengthLimitCount: Number(aggRow?.lengthLimitCount ?? 0),
+			contentFilterCount: Number(aggRow?.contentFilterCount ?? 0),
+			toolCallsCount: Number(aggRow?.toolCallsCount ?? 0),
+			canceledCount: Number(aggRow?.canceledCount ?? 0),
+			unknownFinishCount: Number(aggRow?.unknownFinishCount ?? 0),
 			cachedCount: hasWindowData
 				? Number(aggRow?.cachedCount ?? 0)
 				: m.cachedCount,
@@ -7873,7 +8036,10 @@ admin.openapi(getDevpassSubscribers, async (c) => {
 	const [countRow] = await countSelect.where(whereClause);
 	const total = Number(countRow?.count ?? 0);
 
-	// KPI strip — always over the full active subscriber base, unfiltered
+	// KPI strip — always over the full active subscriber base, unfiltered.
+	// Matches Stripe's "active" filter, which includes cancel-at-period-end
+	// subscriptions until the period actually ends. The `cancelledPending`
+	// count below breaks out how many of these are flagged to cancel.
 	const activeRows = await db
 		.select({
 			tier: tables.organization.devPlan,
@@ -7883,7 +8049,6 @@ admin.openapi(getDevpassSubscribers, async (c) => {
 		.where(
 			and(
 				ne(tables.organization.devPlan, "none"),
-				eq(tables.organization.devPlanCancelled, false),
 				or(
 					isNull(tables.organization.devPlanExpiresAt),
 					sql`${tables.organization.devPlanExpiresAt} > NOW()`,
@@ -8151,11 +8316,24 @@ admin.openapi(getDevpassTimeseries, async (c) => {
 	// Revenue per day from completed DevPass transactions. Joins organization
 	// so legacy `subscription_*` rows can be counted only when the org is
 	// personal (where they are pre-rename dev plan rows, not org Pro).
+	// Sums `amount` (actual dollars paid) — `creditAmount` is the credits
+	// granted (price × DEV_PLAN_CREDITS_MULTIPLIER) and would over-report
+	// revenue, and is null on legacy `subscription_*` rows so they would
+	// otherwise contribute nothing.
+	//
+	// Deduplicated by (stripe_invoice_id, organization_id): the FIRST invoice
+	// of every subscription triggers BOTH `checkout.session.completed` (which
+	// inserts `dev_plan_start`) AND `invoice.payment_succeeded` (which then
+	// inserts `dev_plan_renewal`) for the same invoice. Without this NOT
+	// EXISTS guard the initial payment is counted twice. Race orderings can
+	// also produce a `subscription_start` paired with a `dev_plan_start` for
+	// the same invoice on personal orgs. We keep the earliest row per invoice
+	// (tie-broken by id) so each Stripe invoice contributes exactly once.
 	const revenuePerDay = await db
 		.select({
 			date: sql<string>`DATE(${tables.transaction.createdAt})`.as("date"),
 			total:
-				sql<string>`COALESCE(SUM(CAST(${tables.transaction.creditAmount} AS NUMERIC)), 0)`.as(
+				sql<string>`COALESCE(SUM(CAST(${tables.transaction.amount} AS NUMERIC)), 0)`.as(
 					"total",
 				),
 		})
@@ -8173,6 +8351,63 @@ admin.openapi(getDevpassTimeseries, async (c) => {
 					inArray(tables.transaction.type, [...DEV_PLAN_TX_TYPES]),
 					and(
 						inArray(tables.transaction.type, [...LEGACY_DEV_PLAN_TX_TYPES]),
+						eq(tables.organization.isPersonal, true),
+					),
+				),
+				sql`NOT EXISTS (
+					SELECT 1 FROM ${tables.transaction} dup
+					WHERE dup.stripe_invoice_id = ${tables.transaction.stripeInvoiceId}
+						AND dup.stripe_invoice_id IS NOT NULL
+						AND dup.organization_id = ${tables.transaction.organizationId}
+						AND dup.id <> ${tables.transaction.id}
+						AND dup.status = 'completed'
+						AND dup.amount IS NOT NULL
+						AND dup.type IN (
+							'dev_plan_start', 'dev_plan_upgrade', 'dev_plan_downgrade', 'dev_plan_renewal',
+							'subscription_start', 'subscription_cancel', 'subscription_end'
+						)
+						AND (
+							dup.created_at < ${tables.transaction.createdAt}
+							OR (dup.created_at = ${tables.transaction.createdAt} AND dup.id < ${tables.transaction.id})
+						)
+				)`,
+			),
+		)
+		.groupBy(sql`DATE(${tables.transaction.createdAt})`)
+		.orderBy(asc(sql`DATE(${tables.transaction.createdAt})`));
+
+	// Refunds per day for DevPass transactions. `credit_refund` rows store the
+	// refunded amount as a positive `amount` and link back via
+	// `relatedTransactionId`. Net them out of revenue when the refunded
+	// transaction was a dev plan or (legacy + personal org) subscription row.
+	const originalTx = aliasedTable(tables.transaction, "original_tx");
+	const refundsPerDay = await db
+		.select({
+			date: sql<string>`DATE(${tables.transaction.createdAt})`.as("date"),
+			total:
+				sql<string>`COALESCE(SUM(CAST(${tables.transaction.amount} AS NUMERIC)), 0)`.as(
+					"total",
+				),
+		})
+		.from(tables.transaction)
+		.innerJoin(
+			originalTx,
+			eq(tables.transaction.relatedTransactionId, originalTx.id),
+		)
+		.innerJoin(
+			tables.organization,
+			eq(tables.transaction.organizationId, tables.organization.id),
+		)
+		.where(
+			and(
+				eq(tables.transaction.type, "credit_refund"),
+				eq(tables.transaction.status, "completed"),
+				gte(tables.transaction.createdAt, startDate),
+				lte(tables.transaction.createdAt, endDate),
+				or(
+					inArray(originalTx.type, [...DEV_PLAN_TX_TYPES]),
+					and(
+						inArray(originalTx.type, [...LEGACY_DEV_PLAN_TX_TYPES]),
 						eq(tables.organization.isPersonal, true),
 					),
 				),
@@ -8227,6 +8462,10 @@ admin.openapi(getDevpassTimeseries, async (c) => {
 	for (const row of revenuePerDay) {
 		revenueMap.set(row.date, Number(row.total));
 	}
+	const refundMap = new Map<string, number>();
+	for (const row of refundsPerDay) {
+		refundMap.set(row.date, Number(row.total));
+	}
 	const costMap = new Map<string, number>();
 	for (const row of costPerDay) {
 		costMap.set(row.date, Number(row.total));
@@ -8257,7 +8496,7 @@ admin.openapi(getDevpassTimeseries, async (c) => {
 
 	while (cursor.getTime() <= lastDay) {
 		const iso = cursor.toISOString().slice(0, 10);
-		const revenue = revenueMap.get(iso) ?? 0;
+		const revenue = (revenueMap.get(iso) ?? 0) - (refundMap.get(iso) ?? 0);
 		const cost = costMap.get(iso) ?? 0;
 		const margin = revenue - cost;
 		data.push({ date: iso, revenue, cost, margin });

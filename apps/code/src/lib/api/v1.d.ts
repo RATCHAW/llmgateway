@@ -490,6 +490,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/chats/share/{shareId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    shareId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Public shared chat snapshot. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            share: {
+                                id: string;
+                                title: string;
+                                model: string;
+                                /** Format: date-time */
+                                createdAt: string;
+                                messages: {
+                                    id: string;
+                                    /** @enum {string} */
+                                    role: "user" | "assistant" | "system";
+                                    content: string | null;
+                                    images: string | null;
+                                    reasoning: string | null;
+                                    tools: string | null;
+                                    sequence: number;
+                                    /** Format: date-time */
+                                    createdAt: string;
+                                }[];
+                            };
+                        };
+                    };
+                };
+                /** @description Shared chat not found. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/apps": {
         parameters: {
             query?: never;
@@ -3126,6 +3194,12 @@ export interface paths {
                                 clientErrorsCount: number;
                                 gatewayErrorsCount: number;
                                 upstreamErrorsCount: number;
+                                completedCount: number;
+                                lengthLimitCount: number;
+                                contentFilterCount: number;
+                                toolCallsCount: number;
+                                canceledCount: number;
+                                unknownFinishCount: number;
                                 cachedCount: number;
                                 avgTimeToFirstToken: number | null;
                                 providerCount: number;
@@ -3566,6 +3640,12 @@ export interface paths {
                                 clientErrorsCount: number;
                                 gatewayErrorsCount: number;
                                 upstreamErrorsCount: number;
+                                completedCount: number;
+                                lengthLimitCount: number;
+                                contentFilterCount: number;
+                                toolCallsCount: number;
+                                canceledCount: number;
+                                unknownFinishCount: number;
                                 cachedCount: number;
                                 avgTimeToFirstToken: number | null;
                                 updatedAt: string;
@@ -7143,6 +7223,9 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "active" | "archived" | "deleted";
                                 webSearch: boolean;
+                                shareId: string | null;
+                                /** Format: date-time */
+                                sharedAt: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
                                 /** Format: date-time */
@@ -7187,6 +7270,9 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "active" | "archived" | "deleted";
                                 webSearch: boolean;
+                                shareId: string | null;
+                                /** Format: date-time */
+                                sharedAt: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
                                 /** Format: date-time */
@@ -7209,6 +7295,63 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    q?: string;
+                    limit?: number;
+                    offset?: number | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Search user's chats */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            chats: {
+                                id: string;
+                                title: string;
+                                model: string;
+                                /** @enum {string} */
+                                status: "active" | "archived" | "deleted";
+                                webSearch: boolean;
+                                shareId: string | null;
+                                /** Format: date-time */
+                                sharedAt: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                                messageCount: number;
+                            }[];
+                            total: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7247,6 +7390,9 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "active" | "archived" | "deleted";
                                 webSearch: boolean;
+                                shareId: string | null;
+                                /** Format: date-time */
+                                sharedAt: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
                                 /** Format: date-time */
@@ -7342,6 +7488,9 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "active" | "archived" | "deleted";
                                 webSearch: boolean;
+                                shareId: string | null;
+                                /** Format: date-time */
+                                sharedAt: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
                                 /** Format: date-time */
@@ -7353,6 +7502,136 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/chats/{id}/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Chat share snapshot. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            share: {
+                                id: string;
+                                url: string;
+                                /** Format: date-time */
+                                createdAt: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Chat share deleted successfully. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/share/{shareId}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    shareId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Shared chat forked successfully. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            chat: {
+                                id: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Chat limit reached or validation error. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            message: string;
+                        };
+                    };
+                };
+                /** @description Shared chat not found. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/chats/{id}/messages": {
@@ -9047,6 +9326,7 @@ export interface operations {
                                 maxOutput: number | null;
                                 streaming: boolean;
                                 vision: boolean | null;
+                                audio: boolean | null;
                                 reasoning: boolean | null;
                                 reasoningOutput: string | null;
                                 tools: boolean | null;

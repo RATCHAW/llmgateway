@@ -4,6 +4,7 @@ import {
 	ImageIcon,
 	Loader2Icon,
 	MicIcon,
+	Music2Icon,
 	PaperclipIcon,
 	PlusIcon,
 	SendIcon,
@@ -256,16 +257,41 @@ export function PromptInputAttachment({
 				? "audio"
 				: "file";
 
+	if (mediaType === "audio") {
+		return (
+			<div
+				className={cn(
+					"group relative flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-md border border-border px-1.5 font-medium text-sm transition-all hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+					className,
+				)}
+				key={data.id}
+				{...props}
+			>
+				<div className="flex size-5 shrink-0 items-center justify-center overflow-hidden rounded bg-background">
+					<Music2Icon className="size-3 text-muted-foreground" />
+				</div>
+				<Button
+					aria-label="Remove attachment"
+					className="size-5 rounded p-0 opacity-0 transition-opacity group-hover:opacity-100 [&>svg]:size-2.5"
+					onClick={(e) => {
+						e.stopPropagation();
+						attachments.remove(data.id);
+					}}
+					type="button"
+					variant="ghost"
+				>
+					<XIcon />
+				</Button>
+			</div>
+		);
+	}
+
 	return (
 		<div
 			className={cn(
 				"group relative rounded-md border",
 				className,
-				mediaType === "image"
-					? "h-14 w-14"
-					: mediaType === "audio"
-						? "h-10 w-auto max-w-[280px]"
-						: "h-8 w-auto max-w-full",
+				mediaType === "image" ? "h-14 w-14" : "h-8 w-auto max-w-full",
 			)}
 			key={data.id}
 			{...props}
@@ -278,15 +304,6 @@ export function PromptInputAttachment({
 					src={data.url}
 					width={56}
 				/>
-			) : mediaType === "audio" ? (
-				<audio
-					controls
-					src={data.url}
-					className="h-full w-full rounded-md"
-					aria-label={data.filename ?? "audio attachment"}
-				>
-					<track kind="captions" />
-				</audio>
 			) : (
 				<div className="flex size-full max-w-full cursor-pointer items-center justify-start gap-2 overflow-hidden px-2 text-muted-foreground">
 					<PaperclipIcon className="size-4 shrink-0" />
@@ -409,8 +426,7 @@ export const PromptInputActionAddAttachments = ({
 	return (
 		<DropdownMenuItem
 			{...props}
-			onSelect={(e) => {
-				e.preventDefault();
+			onSelect={() => {
 				attachments.openFileDialog();
 			}}
 		>

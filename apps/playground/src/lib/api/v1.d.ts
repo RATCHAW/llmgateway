@@ -527,6 +527,7 @@ export interface paths {
                                     role: "user" | "assistant" | "system";
                                     content: string | null;
                                     images: string | null;
+                                    audios?: string | null;
                                     reasoning: string | null;
                                     tools: string | null;
                                     sequence: number;
@@ -7405,6 +7406,7 @@ export interface paths {
                                 role: "user" | "assistant" | "system";
                                 content: string | null;
                                 images: string | null;
+                                audios: string | null;
                                 reasoning: string | null;
                                 tools: string | null;
                                 sequence: number;
@@ -7659,6 +7661,7 @@ export interface paths {
                         role: "user" | "assistant" | "system";
                         content?: string;
                         images?: string;
+                        audios?: string;
                         reasoning?: string;
                         tools?: string;
                     };
@@ -7678,6 +7681,7 @@ export interface paths {
                                 role: "user" | "assistant" | "system";
                                 content: string | null;
                                 images: string | null;
+                                audios: string | null;
                                 reasoning: string | null;
                                 tools: string | null;
                                 sequence: number;

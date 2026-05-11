@@ -39,6 +39,7 @@ const messageSchema = z.object({
 	role: z.enum(["user", "assistant", "system"]),
 	content: z.string().nullable(),
 	images: z.string().nullable(), // JSON string
+	audios: z.string().nullable(), // JSON string of audio attachments
 	reasoning: z.string().nullable(), // Reasoning content
 	tools: z.string().nullable(), // JSON string of tool parts
 	sequence: z.number(),
@@ -57,6 +58,7 @@ const sharedMessageSnapshotSchema = z.array(
 		role: z.enum(["user", "assistant", "system"]),
 		content: z.string().nullable(),
 		images: z.string().nullable(),
+		audios: z.string().nullable().optional(),
 		reasoning: z.string().nullable(),
 		tools: z.string().nullable(),
 		sequence: z.number(),
@@ -80,13 +82,19 @@ const createMessageSchema = z
 		role: z.enum(["user", "assistant", "system"]),
 		content: z.string().optional(),
 		images: z.string().optional(), // JSON string
+		audios: z.string().optional(), // JSON string of audio attachments
 		reasoning: z.string().optional(), // Reasoning content
 		tools: z.string().optional(), // Tool parts JSON
 	})
 	.refine(
-		(data) => data.content ?? data.images ?? data.reasoning ?? data.tools,
+		(data) =>
+			data.content ??
+			data.images ??
+			data.audios ??
+			data.reasoning ??
+			data.tools,
 		{
-			message: "Either content or images must be provided",
+			message: "Either content, images, or audios must be provided",
 		},
 	);
 
@@ -484,6 +492,7 @@ chats.openapi(getChat, async (c) => {
 				role: message.role as "user" | "assistant" | "system",
 				content: message.content,
 				images: message.images,
+				audios: (message as any).audios ?? null,
 				reasoning: message.reasoning,
 				tools: (message as any).tools ?? null,
 				sequence: message.sequence,
@@ -657,6 +666,7 @@ chats.openapi(shareChat, async (c) => {
 			role: tables.message.role,
 			content: tables.message.content,
 			images: tables.message.images,
+			audios: tables.message.audios,
 			reasoning: tables.message.reasoning,
 			tools: tables.message.tools,
 			sequence: tables.message.sequence,
@@ -678,6 +688,7 @@ chats.openapi(shareChat, async (c) => {
 				role: message.role,
 				content: message.content,
 				images: message.images,
+				audios: message.audios,
 				reasoning: message.reasoning,
 				tools: message.tools,
 				sequence: message.sequence,
@@ -886,6 +897,7 @@ chats.openapi(forkSharedChat, async (c) => {
 					role: message.role,
 					content: message.content,
 					images: message.images,
+					audios: message.audios ?? null,
 					reasoning: message.reasoning,
 					tools: message.tools,
 					sequence: message.sequence,
@@ -1052,6 +1064,7 @@ chats.openapi(addMessage, async (c) => {
 			role: body.role,
 			content: body.content ?? null,
 			images: body.images ?? null,
+			audios: body.audios ?? null,
 			reasoning: body.reasoning ?? null,
 			tools: body.tools ?? null,
 			sequence: nextSequence,
@@ -1071,6 +1084,7 @@ chats.openapi(addMessage, async (c) => {
 				role: newMessage.role as "user" | "assistant" | "system",
 				content: newMessage.content,
 				images: newMessage.images,
+				audios: (newMessage as any).audios ?? null,
 				reasoning: newMessage.reasoning,
 				tools: (newMessage as any).tools ?? null,
 				sequence: newMessage.sequence,

@@ -150,6 +150,12 @@ interface ChatUIProps {
 				url: string;
 			};
 		}>,
+		audio?: Array<{
+			type: "audio";
+			url: string;
+			mediaType: string;
+			name?: string;
+		}>,
 	) => Promise<void>;
 	isLoading?: boolean;
 	error?: string | null;
@@ -607,6 +613,18 @@ export const ChatUI = ({
 							}))
 					: undefined;
 
+			const audioToSave =
+				supportsAudio && files?.length
+					? files
+							.filter((f) => f.mediaType?.startsWith("audio/") && f.url)
+							.map((f) => ({
+								type: "audio" as const,
+								url: f.url!,
+								mediaType: f.mediaType!,
+								...(f.filename ? { name: f.filename } : {}),
+							}))
+					: undefined;
+
 			if (content.trim()) {
 				parts.push({ type: "text", text: content });
 			}
@@ -645,8 +663,11 @@ export const ChatUI = ({
 
 			// Ensure the chat exists + user message is persisted BEFORE streaming starts.
 			// Otherwise `onFinish` may run before `chatIdRef` is set, and we can't save the AI response.
-			if (onUserMessage && (content.trim() || imagesToSave?.length)) {
-				await onUserMessage(content, imagesToSave);
+			if (
+				onUserMessage &&
+				(content.trim() || imagesToSave?.length || audioToSave?.length)
+			) {
+				await onUserMessage(content, imagesToSave, audioToSave);
 			}
 
 			// Call sendMessage which will handle adding the user message and API request

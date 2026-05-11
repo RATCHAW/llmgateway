@@ -659,6 +659,28 @@ export default function ChatPageClient({
 						}
 					}
 
+					// Add audio attachments if present
+					if (msg.audios) {
+						try {
+							const parsedAudios = JSON.parse(msg.audios);
+							if (Array.isArray(parsedAudios)) {
+								for (const a of parsedAudios) {
+									if (!a?.url) {
+										continue;
+									}
+									parts.push({
+										type: "file",
+										mediaType: a.mediaType ?? "audio/mpeg",
+										url: a.url,
+										...(a.name ? { name: a.name } : {}),
+									});
+								}
+							}
+						} catch (error) {
+							toast.error("Failed to parse audios: " + getErrorMessage(error));
+						}
+					}
+
 					// Add tool parts if present
 					if ((msg as any).tools) {
 						try {
@@ -764,6 +786,12 @@ export default function ChatPageClient({
 			type: "image_url";
 			image_url: { url: string };
 		}>,
+		audio?: Array<{
+			type: "audio";
+			url: string;
+			mediaType: string;
+			name?: string;
+		}>,
 	) => {
 		if (selectedOrganization && Number(selectedOrganization.credits) <= 0) {
 			setShowTopUp(true);
@@ -776,6 +804,7 @@ export default function ChatPageClient({
 		posthog.capture("playground_chat_sent", {
 			model: selectedModel,
 			has_images: !!images?.length,
+			has_audio: !!audio?.length,
 			web_search: webSearchEnabled,
 		});
 		errorOccurredRef.current = false;
@@ -814,6 +843,7 @@ export default function ChatPageClient({
 					role: "user",
 					...(content.trim() ? { content } : {}),
 					...(images?.length ? { images: JSON.stringify(images) } : {}),
+					...(audio?.length ? { audios: JSON.stringify(audio) } : {}),
 				},
 			});
 		} catch (error: any) {
@@ -832,6 +862,7 @@ export default function ChatPageClient({
 							role: "user",
 							...(content.trim() ? { content } : {}),
 							...(images?.length ? { images: JSON.stringify(images) } : {}),
+							...(audio?.length ? { audios: JSON.stringify(audio) } : {}),
 						},
 					});
 					setIsLoading(false);

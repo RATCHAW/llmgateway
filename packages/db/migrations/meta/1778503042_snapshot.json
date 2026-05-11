@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "e547b052-6cb9-48c5-92c5-70435f2e9898",
+  "id": "cebfcb35-b300-4af0-aa42-4cc0fc70fd5e",
   "prevId": "42cf3716-7ca9-4851-98d3-6b3a95fbb4c9",
   "ddl": [
     {
@@ -6599,6 +6599,19 @@
       "generated": null,
       "identity": null,
       "name": "images",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "message"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "audios",
       "entityType": "columns",
       "schema": "public",
       "table": "message"

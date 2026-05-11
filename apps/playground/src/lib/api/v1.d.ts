@@ -997,6 +997,7 @@ export interface paths {
                             logs: {
                                 id: string;
                                 requestId: string;
+                                traceId?: string | null;
                                 createdAt: string;
                                 updatedAt: string;
                                 organizationId: string;
@@ -1249,6 +1250,7 @@ export interface paths {
                             log: {
                                 id: string;
                                 requestId: string;
+                                traceId?: string | null;
                                 createdAt: string;
                                 updatedAt: string;
                                 organizationId: string;
@@ -2210,6 +2212,7 @@ export interface paths {
                                 usedProvider: string;
                                 usedModelMapping: string | null;
                                 requestId: string | null;
+                                traceId: string | null;
                                 projectId: string;
                                 organizationId: string;
                                 apiKeyId: string;

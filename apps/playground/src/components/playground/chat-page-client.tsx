@@ -214,6 +214,13 @@ export default function ChatPageClient({
 	// Tracks which chat's messages are currently displayed in the useChat state,
 	// so we know when a navigation requires reloading from the server.
 	const loadedChatIdRef = useRef<string | null>(null);
+	// Set by ensureCurrentChat after it calls setCurrentChatId + router.replace.
+	// Used by the URL sync effect to ignore the brief window where currentChatId
+	// is the new id but chatIdFromUrl is still the stale value — without this guard
+	// the effect "corrects" currentChatId back to null and then the load effect
+	// resets loadedChatIdRef, which causes the post-stream refetch to clobber the
+	// streamed reply.
+	const pendingNewChatRef = useRef<string | null>(null);
 
 	const { messages, setMessages, sendMessage, status, stop, regenerate } =
 		useChat({
@@ -386,14 +393,32 @@ export default function ChatPageClient({
 
 	// Sync currentChatId with URL param changes
 	useEffect(() => {
-		if (chatIdFromUrl !== currentChatId) {
-			// Only clear messages if explicitly requested (by handleChatSelect or handleNewChat)
-			if (shouldClearMessagesRef.current) {
-				setMessages([]);
-				shouldClearMessagesRef.current = false;
+		if (chatIdFromUrl === currentChatId) {
+			// URL caught up with state — clear the pending flag.
+			if (pendingNewChatRef.current === currentChatId) {
+				pendingNewChatRef.current = null;
 			}
-			setCurrentChatId(chatIdFromUrl);
+			return;
 		}
+
+		// Guard the ensureCurrentChat race: we just set currentChatId to the new
+		// chat and called router.replace, but chatIdFromUrl hasn't propagated yet.
+		// Wait for the URL to catch up instead of downgrading the state back to null.
+		if (
+			pendingNewChatRef.current !== null &&
+			chatIdFromUrl === null &&
+			currentChatId === pendingNewChatRef.current
+		) {
+			return;
+		}
+
+		if (shouldClearMessagesRef.current) {
+			setMessages([]);
+			// Release ownership so the next chat reloads from the server.
+			loadedChatIdRef.current = null;
+			shouldClearMessagesRef.current = false;
+		}
+		setCurrentChatId(chatIdFromUrl);
 	}, [chatIdFromUrl, currentChatId, setMessages]);
 
 	useEffect(() => {
@@ -772,6 +797,9 @@ export default function ChatPageClient({
 			// Claim ownership: this chat's messages are being populated by the
 			// in-flight stream, so the post-send refetch must not reload from server.
 			loadedChatIdRef.current = newChatId;
+			// Tell the URL sync effect to ignore the stale chatIdFromUrl=null
+			// until router.replace propagates.
+			pendingNewChatRef.current = newChatId;
 
 			// Update URL with new chat ID (without triggering navigation)
 			const params = new URLSearchParams(searchParams.toString());

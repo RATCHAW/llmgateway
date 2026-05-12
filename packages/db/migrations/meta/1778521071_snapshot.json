@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "cebfcb35-b300-4af0-aa42-4cc0fc70fd5e",
+  "id": "0874fdf6-7b44-43fb-b7c1-b34bfbb5ca1b",
   "prevId": "42cf3716-7ca9-4851-98d3-6b3a95fbb4c9",
   "ddl": [
     {
@@ -1246,22 +1246,6 @@
       },
       "generated": null,
       "identity": null,
-      "name": "audio_input_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "api_key_hourly_model_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
       "name": "video_output_cost",
       "entityType": "columns",
       "schema": "public",
@@ -1923,22 +1907,6 @@
       "generated": null,
       "identity": null,
       "name": "image_output_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "api_key_hourly_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
-      "name": "audio_input_cost",
       "entityType": "columns",
       "schema": "public",
       "table": "api_key_hourly_stats"
@@ -3943,22 +3911,6 @@
       },
       "generated": null,
       "identity": null,
-      "name": "audio_input_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "global_model_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
       "name": "video_output_cost",
       "entityType": "columns",
       "schema": "public",
@@ -4607,22 +4559,6 @@
       "generated": null,
       "identity": null,
       "name": "image_output_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "global_source_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
-      "name": "audio_input_cost",
       "entityType": "columns",
       "schema": "public",
       "table": "global_source_stats"
@@ -6041,32 +5977,6 @@
       "table": "log"
     },
     {
-      "type": "numeric",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "audio_input_tokens",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "log"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "audio_input_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "log"
-    },
-    {
       "type": "real",
       "typeSchema": null,
       "notNull": false,
@@ -6611,19 +6521,6 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "audios",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "message"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
       "name": "reasoning",
       "entityType": "columns",
       "schema": "public",
@@ -6638,6 +6535,19 @@
       "generated": null,
       "identity": null,
       "name": "tools",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "message"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "metadata",
       "entityType": "columns",
       "schema": "public",
       "table": "message"
@@ -10231,22 +10141,6 @@
       },
       "generated": null,
       "identity": null,
-      "name": "audio_input_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "project_hourly_model_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
       "name": "video_output_cost",
       "entityType": "columns",
       "schema": "public",
@@ -10895,22 +10789,6 @@
       "generated": null,
       "identity": null,
       "name": "image_output_cost",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "project_hourly_stats"
-    },
-    {
-      "type": "real",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": {
-        "value": "0",
-        "type": "unknown"
-      },
-      "generated": null,
-      "identity": null,
-      "name": "audio_input_cost",
       "entityType": "columns",
       "schema": "public",
       "table": "project_hourly_stats"

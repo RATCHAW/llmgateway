@@ -58,6 +58,11 @@ describe("Models", () => {
 		const hasImagePricing = (provider: ProviderModelMapping) =>
 			!!provider.imageInputPrice || !!provider.imageOutputPrice;
 
+		// Embedding models bill only on input tokens and set outputPrice=0
+		// because they don't produce text output.
+		const isEmbeddingProvider = (provider: ProviderModelMapping) =>
+			provider.embeddings === true;
+
 		// Filter models that have zero input/output pricing AND no request or per-second price
 		const modelsWithZeroPricing = models.filter((model) =>
 			model.providers.some(
@@ -67,7 +72,8 @@ describe("Models", () => {
 					!Object.values(
 						(provider as ProviderModelMapping).perSecondPrice ?? {},
 					).some((price) => price > 0) &&
-					!hasImagePricing(provider as ProviderModelMapping),
+					!hasImagePricing(provider as ProviderModelMapping) &&
+					!isEmbeddingProvider(provider as ProviderModelMapping),
 			),
 		);
 
@@ -84,7 +90,8 @@ describe("Models", () => {
 						!Object.values(
 							(p as ProviderModelMapping).perSecondPrice ?? {},
 						).some((price) => price > 0) &&
-						!hasImagePricing(p as ProviderModelMapping),
+						!hasImagePricing(p as ProviderModelMapping) &&
+						!isEmbeddingProvider(p as ProviderModelMapping),
 				);
 				return `${model.id}: providers ${zeroPricedProviders.map((p) => `${p.providerId}/${p.modelName} (input: ${p.inputPrice}, output: ${p.outputPrice})`).join(", ")}`;
 			});

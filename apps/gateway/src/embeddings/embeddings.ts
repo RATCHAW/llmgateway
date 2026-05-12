@@ -563,7 +563,14 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		});
 	}
 
-	const upstreamUrl = `${providerKey?.baseUrl ?? "https://api.openai.com"}/v1/embeddings`;
+	const providerBaseUrlDefaults: Partial<Record<string, string>> = {
+		openai: "https://api.openai.com",
+	};
+	const resolvedBaseUrl =
+		providerKey?.baseUrl ??
+		providerBaseUrlDefaults[providerId] ??
+		"https://api.openai.com";
+	const upstreamUrl = `${resolvedBaseUrl}/v1/embeddings`;
 	const requestBody: Record<string, unknown> = {
 		input,
 		model: upstreamModel,

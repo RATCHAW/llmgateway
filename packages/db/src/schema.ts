@@ -1040,6 +1040,7 @@ export const message = pgTable(
 		audios: text(), // JSON string to store audio attachments array
 		reasoning: text(), // Reasoning content from AI models
 		tools: text(), // JSON string to store tool call parts
+		metadata: jsonb().$type<Record<string, unknown>>(),
 		sequence: integer().notNull(), // To maintain message order
 	},
 	(table) => [index("message_chat_id_idx").on(table.chatId)],

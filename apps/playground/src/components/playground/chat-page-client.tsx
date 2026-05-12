@@ -18,7 +18,6 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 // No local api key. We'll call backend to ensure key cookie exists after login.
 import {
 	useAddMessage,
-	useChats,
 	useCreateChat,
 	useDataChat,
 	useDeleteChat,
@@ -28,6 +27,7 @@ import { useUser } from "@/hooks/useUser";
 import { getModelImageConfig } from "@/lib/image-gen";
 import { parseImageFile } from "@/lib/image-utils";
 import { mapModels } from "@/lib/mapmodels";
+import { parsePlaygroundMessageMetadata } from "@/lib/message-metadata";
 import { shouldDisableFallback } from "@/lib/no-fallback";
 import { getErrorMessage } from "@/lib/utils";
 
@@ -211,6 +211,16 @@ export default function ChatPageClient({
 	const panelIdCounterRef = useRef(1);
 	// Flag to indicate we should clear messages on next URL change (set by handleChatSelect)
 	const shouldClearMessagesRef = useRef(false);
+	// Tracks which chat's messages are currently displayed in the useChat state,
+	// so we know when a navigation requires reloading from the server.
+	const loadedChatIdRef = useRef<string | null>(null);
+	// Set by ensureCurrentChat after it calls setCurrentChatId + router.replace.
+	// Used by the URL sync effect to ignore the brief window where currentChatId
+	// is the new id but chatIdFromUrl is still the stale value — without this guard
+	// the effect "corrects" currentChatId back to null and then the load effect
+	// resets loadedChatIdRef, which causes the post-stream refetch to clobber the
+	// streamed reply.
+	const pendingNewChatRef = useRef<string | null>(null);
 
 	const { messages, setMessages, sendMessage, status, stop, regenerate } =
 		useChat({
@@ -345,6 +355,7 @@ export default function ChatPageClient({
 
 				// Extract tool parts (AI SDK v6 uses tool-{toolName} as the part type)
 				const toolParts = message.parts.filter(isToolPart);
+				const metadata = parsePlaygroundMessageMetadata(message.metadata);
 
 				const bodyToSave = {
 					role: "assistant" as const,
@@ -352,6 +363,7 @@ export default function ChatPageClient({
 					images: images.length > 0 ? JSON.stringify(images) : undefined,
 					reasoning: reasoningContent || undefined,
 					tools: toolParts.length > 0 ? JSON.stringify(toolParts) : undefined,
+					...(metadata ? { metadata } : {}),
 				};
 
 				try {
@@ -381,14 +393,32 @@ export default function ChatPageClient({
 
 	// Sync currentChatId with URL param changes
 	useEffect(() => {
-		if (chatIdFromUrl !== currentChatId) {
-			// Only clear messages if explicitly requested (by handleChatSelect or handleNewChat)
-			if (shouldClearMessagesRef.current) {
-				setMessages([]);
-				shouldClearMessagesRef.current = false;
+		if (chatIdFromUrl === currentChatId) {
+			// URL caught up with state — clear the pending flag.
+			if (pendingNewChatRef.current === currentChatId) {
+				pendingNewChatRef.current = null;
 			}
-			setCurrentChatId(chatIdFromUrl);
+			return;
 		}
+
+		// Guard the ensureCurrentChat race: we just set currentChatId to the new
+		// chat and called router.replace, but chatIdFromUrl hasn't propagated yet.
+		// Wait for the URL to catch up instead of downgrading the state back to null.
+		if (
+			pendingNewChatRef.current !== null &&
+			chatIdFromUrl === null &&
+			currentChatId === pendingNewChatRef.current
+		) {
+			return;
+		}
+
+		if (shouldClearMessagesRef.current) {
+			setMessages([]);
+			// Release ownership so the next chat reloads from the server.
+			loadedChatIdRef.current = null;
+			shouldClearMessagesRef.current = false;
+		}
+		setCurrentChatId(chatIdFromUrl);
 	}, [chatIdFromUrl, currentChatId, setMessages]);
 
 	useEffect(() => {
@@ -597,113 +627,139 @@ export default function ChatPageClient({
 	const { data: currentChatData, isLoading: isChatLoading } = useDataChat(
 		currentChatId ?? "",
 	);
-	useChats();
 
 	useEffect(() => {
-		if (!currentChatData?.messages || isSendingRef.current || isTemporaryChat) {
+		// Use `status` from useChat (reactive) instead of the isSendingRef ref so
+		// the effect re-runs when a stream finishes and can pick up a chat the
+		// user navigated to mid-stream.
+		if (status === "submitted" || status === "streaming" || isTemporaryChat) {
 			return;
 		}
 
-		setMessages((prev) => {
-			// Load messages if empty (URL change clears messages first)
-			if (prev.length === 0) {
-				// Only update the selected model when first loading a chat
-				if (currentChatData.chat?.model) {
-					setSelectedModel(currentChatData.chat.model);
+		// No chat selected: drop ownership so the next chat we visit reloads cleanly.
+		if (!currentChatId) {
+			loadedChatIdRef.current = null;
+			return;
+		}
+
+		if (!currentChatData?.messages) {
+			return;
+		}
+
+		const fetchedChatId = currentChatData.chat?.id ?? null;
+
+		// Wait until the fetched data is for the chat the user actually selected —
+		// otherwise we'd briefly render the previous chat's messages while
+		// useDataChat refetches against the new key.
+		if (fetchedChatId !== currentChatId) {
+			return;
+		}
+
+		// Already loaded this chat's messages into useChat state. Skip so that
+		// post-send query invalidations don't clobber the just-streamed reply.
+		if (loadedChatIdRef.current === fetchedChatId) {
+			return;
+		}
+
+		loadedChatIdRef.current = fetchedChatId;
+
+		if (currentChatData.chat?.model) {
+			setSelectedModel(currentChatData.chat.model);
+		}
+
+		if (currentChatData.chat?.webSearch !== undefined) {
+			setWebSearchEnabled(currentChatData.chat.webSearch);
+		}
+
+		setMessages(
+			currentChatData.messages.map((msg) => {
+				const parts: any[] = [];
+
+				if (msg.content) {
+					parts.push({ type: "text", text: msg.content });
 				}
 
-				// Only update the web search state when first loading a chat
-				if (currentChatData.chat?.webSearch !== undefined) {
-					setWebSearchEnabled(currentChatData.chat.webSearch);
+				if ((msg as any).reasoning) {
+					parts.push({ type: "reasoning", text: (msg as any).reasoning });
 				}
-				return currentChatData.messages.map((msg) => {
-					const parts: any[] = [];
 
-					// Add text content
-					if (msg.content) {
-						parts.push({ type: "text", text: msg.content });
-					}
-
-					// Add reasoning if present
-					if ((msg as any).reasoning) {
-						parts.push({ type: "reasoning", text: (msg as any).reasoning });
-					}
-
-					// Add images if present
-					if (msg.images) {
-						try {
-							const parsedImages = JSON.parse(msg.images);
-							// Convert saved image_url format to file format for rendering
-							const imageParts = parsedImages.map((img: any) => {
-								const dataUrl = img.image_url?.url ?? "";
-								// Extract base64 and mediaType from data URL
-								if (dataUrl.startsWith("data:")) {
-									const [header, base64] = dataUrl.split(",");
-									const mediaType =
-										header.match(/data:([^;]+)/)?.[1] ?? "image/png";
-									return {
-										type: "file",
-										mediaType,
-										url: base64,
-									};
-								}
+				if (msg.images) {
+					try {
+						const parsedImages = JSON.parse(msg.images);
+						const imageParts = parsedImages.map((img: any) => {
+							const dataUrl = img.image_url?.url ?? "";
+							if (dataUrl.startsWith("data:")) {
+								const [header, base64] = dataUrl.split(",");
+								const mediaType =
+									header.match(/data:([^;]+)/)?.[1] ?? "image/png";
 								return {
 									type: "file",
-									mediaType: "image/png",
-									url: dataUrl,
+									mediaType,
+									url: base64,
 								};
-							});
-							parts.push(...imageParts);
-						} catch (error) {
-							toast.error("Failed to parse images: " + getErrorMessage(error));
-						}
+							}
+							return {
+								type: "file",
+								mediaType: "image/png",
+								url: dataUrl,
+							};
+						});
+						parts.push(...imageParts);
+					} catch (error) {
+						toast.error("Failed to parse images: " + getErrorMessage(error));
 					}
+				}
 
-					// Add audio attachments if present
-					if (msg.audios) {
-						try {
-							const parsedAudios = JSON.parse(msg.audios);
-							if (Array.isArray(parsedAudios)) {
-								for (const a of parsedAudios) {
-									if (!a?.url) {
-										continue;
-									}
-									parts.push({
-										type: "file",
-										mediaType: a.mediaType ?? "audio/mpeg",
-										url: a.url,
-										...(a.name ? { name: a.name } : {}),
-									});
+				if (msg.audios) {
+					try {
+						const parsedAudios = JSON.parse(msg.audios);
+						if (Array.isArray(parsedAudios)) {
+							for (const a of parsedAudios) {
+								if (!a?.url) {
+									continue;
 								}
+								parts.push({
+									type: "file",
+									mediaType: a.mediaType ?? "audio/mpeg",
+									url: a.url,
+									...(a.name ? { name: a.name } : {}),
+								});
 							}
-						} catch (error) {
-							toast.error("Failed to parse audios: " + getErrorMessage(error));
 						}
+					} catch (error) {
+						toast.error("Failed to parse audios: " + getErrorMessage(error));
 					}
+				}
 
-					// Add tool parts if present
-					if ((msg as any).tools) {
-						try {
-							const parsedTools = JSON.parse((msg as any).tools);
-							if (Array.isArray(parsedTools)) {
-								parts.push(...parsedTools.map((t: any) => ({ ...t })));
-							}
-						} catch (error) {
-							toast.error("Failed to parse tools: " + getErrorMessage(error));
+				if ((msg as any).tools) {
+					try {
+						const parsedTools = JSON.parse((msg as any).tools);
+						if (Array.isArray(parsedTools)) {
+							parts.push(...parsedTools.map((t: any) => ({ ...t })));
 						}
+					} catch (error) {
+						toast.error("Failed to parse tools: " + getErrorMessage(error));
 					}
+				}
 
-					return {
-						id: msg.id,
-						role: msg.role,
-						content: msg.content ?? "",
-						parts,
-					};
-				});
-			}
-			return prev;
-		});
-	}, [currentChatData, setMessages, setSelectedModel, isTemporaryChat]);
+				return {
+					id: msg.id,
+					role: msg.role,
+					content: msg.content ?? "",
+					metadata: parsePlaygroundMessageMetadata(msg.metadata),
+					parts,
+				};
+			}),
+		);
+	}, [
+		currentChatId,
+		currentChatData,
+		status,
+		setMessages,
+		setSelectedModel,
+		setWebSearchEnabled,
+		isTemporaryChat,
+	]);
 
 	const isAuthenticated = !isUserLoading && !!user;
 	const showAuthDialog = !isAuthenticated && !isUserLoading && !user;
@@ -767,6 +823,12 @@ export default function ChatPageClient({
 
 			setCurrentChatId(newChatId);
 			chatIdRef.current = newChatId; // Manually update the ref
+			// Claim ownership: this chat's messages are being populated by the
+			// in-flight stream, so the post-send refetch must not reload from server.
+			loadedChatIdRef.current = newChatId;
+			// Tell the URL sync effect to ignore the stale chatIdFromUrl=null
+			// until router.replace propagates.
+			pendingNewChatRef.current = newChatId;
 
 			// Update URL with new chat ID (without triggering navigation)
 			const params = new URLSearchParams(searchParams.toString());

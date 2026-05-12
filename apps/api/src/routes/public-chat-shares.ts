@@ -14,6 +14,7 @@ const sharedMessageSchema = z.object({
 	audios: z.string().nullable().optional(),
 	reasoning: z.string().nullable(),
 	tools: z.string().nullable(),
+	metadata: z.record(z.unknown()).nullable().optional(),
 	sequence: z.number(),
 	createdAt: z.string().datetime(),
 });

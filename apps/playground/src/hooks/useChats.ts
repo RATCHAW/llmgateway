@@ -25,6 +25,7 @@ export interface ChatMessage {
 	audios: string | null; // JSON string of audio attachments
 	reasoning: string | null; // Reasoning content from AI
 	tools: string | null; // Tool parts JSON
+	metadata: unknown | null; // Assistant response metadata
 	sequence: number;
 	createdAt: string;
 }

@@ -42,6 +42,7 @@ const messageSchema = z.object({
 	audios: z.string().nullable(), // JSON string of audio attachments
 	reasoning: z.string().nullable(), // Reasoning content
 	tools: z.string().nullable(), // JSON string of tool parts
+	metadata: z.record(z.unknown()).nullable(),
 	sequence: z.number(),
 	createdAt: z.string().datetime(),
 });
@@ -61,6 +62,7 @@ const sharedMessageSnapshotSchema = z.array(
 		audios: z.string().nullable().optional(),
 		reasoning: z.string().nullable(),
 		tools: z.string().nullable(),
+		metadata: z.record(z.unknown()).nullable().optional(),
 		sequence: z.number(),
 		createdAt: z.string().datetime(),
 	}),
@@ -85,6 +87,7 @@ const createMessageSchema = z
 		audios: z.string().optional(), // JSON string of audio attachments
 		reasoning: z.string().optional(), // Reasoning content
 		tools: z.string().optional(), // Tool parts JSON
+		metadata: z.record(z.unknown()).optional(),
 	})
 	.refine(
 		(data) =>
@@ -494,7 +497,8 @@ chats.openapi(getChat, async (c) => {
 				images: message.images,
 				audios: (message as any).audios ?? null,
 				reasoning: message.reasoning,
-				tools: (message as any).tools ?? null,
+				tools: message.tools ?? null,
+				metadata: message.metadata ?? null,
 				sequence: message.sequence,
 				createdAt: message.createdAt.toISOString(),
 			})),
@@ -669,6 +673,7 @@ chats.openapi(shareChat, async (c) => {
 			audios: tables.message.audios,
 			reasoning: tables.message.reasoning,
 			tools: tables.message.tools,
+			metadata: tables.message.metadata,
 			sequence: tables.message.sequence,
 			createdAt: tables.message.createdAt,
 		})
@@ -691,6 +696,7 @@ chats.openapi(shareChat, async (c) => {
 				audios: message.audios,
 				reasoning: message.reasoning,
 				tools: message.tools,
+				metadata: message.metadata,
 				sequence: message.sequence,
 				createdAt: message.createdAt.toISOString(),
 			})),
@@ -900,6 +906,7 @@ chats.openapi(forkSharedChat, async (c) => {
 					audios: message.audios ?? null,
 					reasoning: message.reasoning,
 					tools: message.tools,
+					metadata: message.metadata ?? null,
 					sequence: message.sequence,
 				})),
 			);
@@ -1067,6 +1074,7 @@ chats.openapi(addMessage, async (c) => {
 			audios: body.audios ?? null,
 			reasoning: body.reasoning ?? null,
 			tools: body.tools ?? null,
+			metadata: body.metadata ?? null,
 			sequence: nextSequence,
 		})
 		.returning();
@@ -1086,7 +1094,8 @@ chats.openapi(addMessage, async (c) => {
 				images: newMessage.images,
 				audios: (newMessage as any).audios ?? null,
 				reasoning: newMessage.reasoning,
-				tools: (newMessage as any).tools ?? null,
+				tools: newMessage.tools ?? null,
+				metadata: newMessage.metadata ?? null,
 				sequence: newMessage.sequence,
 				createdAt: newMessage.createdAt.toISOString(),
 			},

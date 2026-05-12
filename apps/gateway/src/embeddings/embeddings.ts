@@ -285,6 +285,14 @@ const createEmbeddings = createRoute({
 			},
 			description: "Unauthorized request.",
 		},
+		402: {
+			content: {
+				"application/json": {
+					schema: embeddingErrorSchema,
+				},
+			},
+			description: "Payment required / Insufficient credits or retention.",
+		},
 		403: {
 			content: {
 				"application/json": {
@@ -783,10 +791,22 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 			toolResults: null,
 		});
 
+		const normalizedUpstreamError: z.infer<typeof embeddingErrorSchema> = {
+			error: {
+				message:
+					typeof upstreamJson === "string"
+						? upstreamJson
+						: (upstreamResponse.statusText ?? "Upstream error"),
+				type: "upstream_error",
+				param: null,
+				code: "upstream_error",
+			},
+		};
+
 		return c.json(
-			(typeof upstreamJson === "string"
-				? { error: { message: upstreamJson } }
-				: upstreamJson) ?? { error: true },
+			upstreamJson && typeof upstreamJson === "object"
+				? upstreamJson
+				: normalizedUpstreamError,
 			upstreamResponse.status as
 				| 400
 				| 401

@@ -1106,7 +1106,12 @@ mockOpenAIServer.post("/v1/embeddings", async (c) => {
 		typeof body.dimensions === "number" && body.dimensions > 0
 			? body.dimensions
 			: 1536;
-	const items = Array.isArray(body.input) ? body.input.length : 1;
+	const isTokenArray =
+		Array.isArray(body.input) &&
+		body.input.length > 0 &&
+		body.input.every((item: unknown) => typeof item === "number");
+	const items =
+		Array.isArray(body.input) && !isTokenArray ? body.input.length : 1;
 	const data = Array.from({ length: items }, (_, index) => ({
 		object: "embedding",
 		index,

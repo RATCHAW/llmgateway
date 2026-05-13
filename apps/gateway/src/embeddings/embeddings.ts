@@ -856,9 +856,9 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 			model: upstreamModel,
 		});
 	}
-	const inputPrice = mapping.inputPrice ?? 0;
+	const inputPrice = Number(mapping.inputPrice ?? "0");
 	const inputCost = promptTokens !== null ? promptTokens * inputPrice : 0;
-	const requestCost = mapping.requestPrice ?? 0;
+	const requestCost = Number(mapping.requestPrice ?? "0");
 	const cost = inputCost + requestCost;
 
 	await insertLog({

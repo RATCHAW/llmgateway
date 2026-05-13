@@ -34,13 +34,26 @@ const usageSchema = z
 	})
 	.passthrough();
 
+const outputTextContentSchema = z
+	.object({
+		type: z.literal("output_text"),
+		text: z.string(),
+		annotations: z.array(z.unknown()),
+	})
+	.passthrough();
+
+const messageContentPartSchema = z.union([
+	outputTextContentSchema,
+	z.object({ type: z.string() }).passthrough(),
+]);
+
 const messageOutputItemSchema = z
 	.object({
 		type: z.literal("message"),
 		id: z.string(),
 		status: z.string(),
 		role: z.enum(["assistant", "user", "system", "developer"]),
-		content: z.array(z.unknown()),
+		content: z.array(messageContentPartSchema),
 		phase: z.enum(["commentary", "final_answer"]).optional(),
 	})
 	.passthrough();
@@ -319,6 +332,53 @@ describe("Open Responses compliance: streaming response shape", () => {
 		expect(data.response.completed_at).not.toBeNull();
 		expect(data.response.usage.input_tokens_details.cached_tokens).toBe(0);
 		expect(data.response.usage.output_tokens_details.reasoning_tokens).toBe(0);
+	});
+
+	it("emits sequence_number on every event and annotations on output_text parts (Open Responses Streaming Response test)", () => {
+		const state = createStreamingState("gpt-4o-mini", "resp_stream_seq");
+		const created = JSON.parse(createResponseCreatedEvent(state).data);
+		expect(typeof created.sequence_number).toBe("number");
+
+		const deltaEvents = processStreamChunk(
+			{ choices: [{ delta: { content: "Hello" } }] },
+			state,
+		);
+		processStreamChunk(
+			{
+				choices: [{ delta: {}, finish_reason: "stop" }],
+				usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+			},
+			state,
+		);
+		const completionEvents = createCompletionEvents(state);
+
+		const allEvents = [...deltaEvents, ...completionEvents];
+		const seqs = allEvents.map(
+			(e) => JSON.parse(e.data).sequence_number as unknown,
+		);
+		for (const s of seqs) {
+			expect(typeof s).toBe("number");
+		}
+		// All sequence numbers (including the response.created at index 0) are unique.
+		const all = [created.sequence_number, ...seqs];
+		expect(new Set(all).size).toBe(all.length);
+
+		const contentPartAdded = deltaEvents.find(
+			(e) => e.event === "response.content_part.added",
+		)!;
+		expect(
+			(JSON.parse(contentPartAdded.data).part as Record<string, unknown>)
+				.annotations,
+		).toEqual([]);
+
+		const completed = JSON.parse(
+			completionEvents.find((e) => e.event === "response.completed")!.data,
+		);
+		expectValid(completed.response, "response.completed (streaming text)");
+		const msg = completed.response.output.find(
+			(o: Record<string, unknown>) => o.type === "message",
+		);
+		expect(msg.content[0].annotations).toEqual([]);
 	});
 
 	it("response.created fills function tool strict with null when omitted", () => {

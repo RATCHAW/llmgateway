@@ -611,9 +611,7 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 	c.req.raw.signal.addEventListener("abort", onAbort);
 
 	let upstreamResponse: Response;
-	let upstreamText: string;
 	let duration: number;
-	let responseSize: number;
 
 	try {
 		const fetchSignal = createCombinedSignal(controller);
@@ -626,11 +624,15 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 			body: JSON.stringify(requestBody),
 			signal: fetchSignal,
 		});
-
-		upstreamText = await upstreamResponse.text();
-		duration = Date.now() - startedAt;
-		responseSize = upstreamText.length;
 	} catch (error) {
+		const isCanceled = error instanceof Error && error.name === "AbortError";
+		const isTimeout = isTimeoutError(error);
+		const isNetworkError = error instanceof TypeError;
+
+		if (!isCanceled && !isTimeout && !isNetworkError) {
+			throw error;
+		}
+
 		duration = Date.now() - startedAt;
 		if (envVarName !== undefined) {
 			reportKeyError(envVarName, configIndex, 0);
@@ -638,9 +640,6 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		if (providerKey?.id) {
 			reportTrackedKeyError(providerKey.id, 0);
 		}
-
-		const isCanceled = error instanceof Error && error.name === "AbortError";
-		const isTimeout = isTimeoutError(error);
 
 		await insertLog({
 			...baseLogEntry,
@@ -725,6 +724,10 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 	} finally {
 		c.req.raw.signal.removeEventListener("abort", onAbort);
 	}
+
+	const upstreamText = await upstreamResponse.text();
+	duration = Date.now() - startedAt;
+	const responseSize = upstreamText.length;
 
 	let upstreamJson: unknown = null;
 	if (upstreamText) {

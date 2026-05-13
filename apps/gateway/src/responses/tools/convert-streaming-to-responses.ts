@@ -1,5 +1,7 @@
 import { shortid } from "@llmgateway/db";
 
+import { normalizeEchoedTools } from "./convert-chat-to-responses.js";
+
 import type { ResponsesEchoRequest } from "./convert-chat-to-responses.js";
 
 interface StreamingState {
@@ -122,7 +124,7 @@ function buildResponsePayload(
 		instructions: req?.instructions ?? null,
 		output,
 		error: null,
-		tools: req?.tools ?? [],
+		tools: normalizeEchoedTools(req?.tools),
 		tool_choice: req?.tool_choice ?? "auto",
 		truncation: req?.truncation ?? "disabled",
 		parallel_tool_calls: req?.parallel_tool_calls ?? true,

@@ -70,6 +70,21 @@ const outputItemSchema = z.union([
 	z.object({ type: z.string() }).passthrough(),
 ]);
 
+const functionToolSchema = z
+	.object({
+		type: z.literal("function"),
+		name: z.string(),
+		description: z.union([z.string(), z.null()]),
+		parameters: z.union([z.record(z.any()), z.null()]),
+		strict: z.union([z.boolean(), z.null()]),
+	})
+	.passthrough();
+
+const echoedToolSchema = z.union([
+	functionToolSchema,
+	z.object({ type: z.string() }).passthrough(),
+]);
+
 export const responseResourceSchema = z
 	.object({
 		id: z.string(),
@@ -89,7 +104,7 @@ export const responseResourceSchema = z
 			.object({ code: z.string(), message: z.string() })
 			.passthrough()
 			.nullable(),
-		tools: z.array(z.unknown()),
+		tools: z.array(echoedToolSchema),
 		tool_choice: z.unknown(),
 		truncation: z.enum(["auto", "disabled"]),
 		parallel_tool_calls: z.boolean(),
@@ -183,6 +198,37 @@ describe("Open Responses compliance: non-streaming response shape", () => {
 		expect(out.tools).toHaveLength(1);
 	});
 
+	it("fills function tool description/parameters/strict with null when omitted (Open Responses tool-calling test)", () => {
+		const out = convertChatResponseToResponses(
+			baseChat,
+			"anthropic/claude-sonnet-4-6",
+			undefined,
+			{
+				tools: [
+					{
+						type: "function",
+						name: "get_weather",
+						description: "Get the current weather for a location",
+						parameters: {
+							type: "object",
+							properties: {
+								location: { type: "string" },
+							},
+							required: ["location"],
+						},
+					},
+				],
+			},
+		);
+		expectValid(out, "tool-calling echo response");
+		const tool = out.tools[0] as Record<string, unknown>;
+		expect(tool.type).toBe("function");
+		expect(tool.name).toBe("get_weather");
+		expect(tool.description).toBe("Get the current weather for a location");
+		expect(tool.parameters).toMatchObject({ type: "object" });
+		expect(tool.strict).toBeNull();
+	});
+
 	it("usage always includes input_tokens_details and output_tokens_details", () => {
 		const out = convertChatResponseToResponses(baseChat, "gpt-4o-mini");
 		expect(out.usage?.input_tokens_details.cached_tokens).toBe(0);
@@ -273,6 +319,17 @@ describe("Open Responses compliance: streaming response shape", () => {
 		expect(data.response.completed_at).not.toBeNull();
 		expect(data.response.usage.input_tokens_details.cached_tokens).toBe(0);
 		expect(data.response.usage.output_tokens_details.reasoning_tokens).toBe(0);
+	});
+
+	it("response.created fills function tool strict with null when omitted", () => {
+		const state = createStreamingState("gpt-4o-mini", "resp_stream_tools", {
+			tools: [{ type: "function", name: "get_weather" }],
+		});
+		const data = JSON.parse(createResponseCreatedEvent(state).data);
+		expectValid(data.response, "response.created (with tool echo)");
+		expect(
+			(data.response.tools[0] as Record<string, unknown>).strict,
+		).toBeNull();
 	});
 
 	it("response.completed echoes request fields when streaming state has them", () => {

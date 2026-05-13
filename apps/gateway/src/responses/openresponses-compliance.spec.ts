@@ -44,7 +44,12 @@ const outputTextContentSchema = z
 
 const messageContentPartSchema = z.union([
 	outputTextContentSchema,
-	z.object({ type: z.string() }).passthrough(),
+	z
+		.object({ type: z.string() })
+		.passthrough()
+		.refine((v) => v.type !== "output_text", {
+			message: "output_text content parts must match outputTextContentSchema",
+		}),
 ]);
 
 const messageOutputItemSchema = z
@@ -95,7 +100,12 @@ const functionToolSchema = z
 
 const echoedToolSchema = z.union([
 	functionToolSchema,
-	z.object({ type: z.string() }).passthrough(),
+	z
+		.object({ type: z.string() })
+		.passthrough()
+		.refine((v) => v.type !== "function", {
+			message: "function tools must match functionToolSchema",
+		}),
 ]);
 
 export const responseResourceSchema = z

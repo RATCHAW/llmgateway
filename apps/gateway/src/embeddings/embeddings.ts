@@ -590,7 +590,7 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		project,
 		apiKey,
 		providerKeyId: providerKey?.id,
-		usedModel: modelDefId,
+		usedModel: `${providerId}/${modelDefId}`,
 		usedModelMapping: upstreamModel,
 		usedProvider: providerId,
 		requestedModel,

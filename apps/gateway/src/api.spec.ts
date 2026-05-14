@@ -2035,6 +2035,32 @@ describe("api", () => {
 		expect(res.status).toBe(400);
 	});
 
+	test("/v1/chat/completions rejects embedding models", async () => {
+		await db.insert(tables.apiKey).values({
+			id: "token-id-chat-embed-reject",
+			token: "real-token-chat-embed-reject",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		const res = await app.request("/v1/chat/completions", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer real-token-chat-embed-reject`,
+			},
+			body: JSON.stringify({
+				model: "text-embedding-3-small",
+				messages: [{ role: "user", content: "Hello!" }],
+			}),
+		});
+
+		expect(res.status).toBe(400);
+		const json = await res.json();
+		expect(json.error?.message ?? json.message).toMatch(/embeddings/i);
+	});
+
 	// test for missing Content-Type header
 	test("/v1/chat/completions missing Content-Type header", async () => {
 		const res = await app.request("/v1/chat/completions", {

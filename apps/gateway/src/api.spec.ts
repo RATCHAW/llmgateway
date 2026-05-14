@@ -382,7 +382,7 @@ describe("api", () => {
 		const embeddingLog = logs.find((log) => log.requestId === requestId);
 
 		expect(embeddingLog).toBeTruthy();
-		expect(embeddingLog?.usedModel).toBe("text-embedding-3-small");
+		expect(embeddingLog?.usedModel).toBe("openai/text-embedding-3-small");
 		expect(embeddingLog?.requestedModel).toBe("text-embedding-3-small");
 		expect(embeddingLog?.usedModelMapping).toBe("text-embedding-3-small");
 		expect(embeddingLog?.usedProvider).toBe("openai");

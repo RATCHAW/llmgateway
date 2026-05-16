@@ -177,6 +177,15 @@ function getErrorFinishReason(status: number): string {
 	return status >= 500 ? "upstream_error" : "client_error";
 }
 
+function packFloat32Base64(values: number[]): string {
+	const buffer = new ArrayBuffer(values.length * 4);
+	const view = new DataView(buffer);
+	for (let i = 0; i < values.length; i++) {
+		view.setFloat32(i * 4, values[i], true);
+	}
+	return Buffer.from(buffer).toString("base64");
+}
+
 function findEmbeddingMapping(modelId: string): {
 	mapping: ProviderModelMapping;
 	modelDef: ModelDefinition;
@@ -422,6 +431,33 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 	const { mapping, modelDef, modelDefId } = match;
 	const upstreamModel = mapping.modelName;
 	const providerId = mapping.providerId;
+
+	const isTokenIdInput = (() => {
+		if (!Array.isArray(input)) {
+			return false;
+		}
+		if (input.every((item) => typeof item === "number")) {
+			return true;
+		}
+		return input.some(
+			(item) => Array.isArray(item) && item.every((n) => typeof n === "number"),
+		);
+	})();
+
+	if (isTokenIdInput && providerId === "google-ai-studio") {
+		return c.json(
+			{
+				error: {
+					message:
+						"Provider google-ai-studio does not support token-ID inputs for embeddings. Pass a string or array of strings instead.",
+					type: "invalid_request_error",
+					param: "input",
+					code: "unsupported_input",
+				},
+			},
+			400,
+		);
+	}
 	const startedAt = Date.now();
 	const source = validateSource(
 		c.req.header("x-source"),
@@ -573,28 +609,20 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		"https://api.openai.com";
 
 	const isGoogleAiStudio = providerId === "google-ai-studio";
-	const inputsArray: Array<string | number[]> = (() => {
-		if (Array.isArray(input)) {
-			if (input.every((item) => typeof item === "number")) {
-				return [input as number[]];
-			}
-			return input as Array<string | number[]>;
-		}
-		return [input as string];
-	})();
+	const googleInputs: string[] = isGoogleAiStudio
+		? Array.isArray(input)
+			? (input as string[])
+			: [input as string]
+		: [];
 
 	let upstreamUrl: string;
 	let requestBody: Record<string, unknown>;
 
 	if (isGoogleAiStudio) {
 		const endpoint =
-			inputsArray.length > 1 ? "batchEmbedContents" : "embedContent";
+			googleInputs.length > 1 ? "batchEmbedContents" : "embedContent";
 		upstreamUrl = `${resolvedBaseUrl}/v1beta/models/${upstreamModel}:${endpoint}?key=${encodeURIComponent(usedToken)}`;
-		const buildSingleRequest = (item: string | number[]) => {
-			const text =
-				typeof item === "string"
-					? item
-					: `[token ids: length=${(item as number[]).length}]`;
+		const buildSingleRequest = (text: string) => {
 			const single: Record<string, unknown> = {
 				content: { parts: [{ text }] },
 			};
@@ -606,13 +634,13 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 
 		if (endpoint === "batchEmbedContents") {
 			requestBody = {
-				requests: inputsArray.map((item) => ({
+				requests: googleInputs.map((text) => ({
 					model: `models/${upstreamModel}`,
-					...buildSingleRequest(item),
+					...buildSingleRequest(text),
 				})),
 			};
 		} else {
-			requestBody = buildSingleRequest(inputsArray[0]);
+			requestBody = buildSingleRequest(googleInputs[0]);
 		}
 	} else {
 		upstreamUrl = `${resolvedBaseUrl}/v1/embeddings`;
@@ -903,20 +931,21 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 			}
 			return [];
 		})();
-		const data = rawEmbeddings.map((item, index) => ({
-			object: "embedding" as const,
-			index,
-			embedding: Array.isArray(item.values) ? (item.values as number[]) : [],
-		}));
-		const estimatedTokens = inputsArray.reduce((sum, item) => {
-			const chars =
-				typeof item === "string"
-					? item.length
-					: Array.isArray(item)
-						? item.length
-						: 0;
-			return sum + Math.max(1, Math.ceil(chars / 4));
-		}, 0);
+		const wantsBase64 = encoding_format === "base64";
+		const data = rawEmbeddings.map((item, index) => {
+			const values = Array.isArray(item.values)
+				? (item.values as number[])
+				: [];
+			return {
+				object: "embedding" as const,
+				index,
+				embedding: wantsBase64 ? packFloat32Base64(values) : values,
+			};
+		});
+		const estimatedTokens = googleInputs.reduce(
+			(sum, text) => sum + Math.max(1, Math.ceil(text.length / 4)),
+			0,
+		);
 		promptTokens = estimatedTokens;
 		totalTokens = estimatedTokens;
 		normalizedResponse = {

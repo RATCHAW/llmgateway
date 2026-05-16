@@ -654,6 +654,92 @@ describe("api", () => {
 		);
 	});
 
+	test("/v1/embeddings google-ai-studio rejects token-id input", async () => {
+		await db.insert(tables.apiKey).values({
+			id: "token-id-embeddings-google-tokenid",
+			token: "real-token-embeddings-google-tokenid",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		await db.insert(tables.providerKey).values({
+			id: "provider-key-id-embeddings-google-tokenid",
+			token: "google-test-key",
+			provider: "google-ai-studio",
+			organizationId: "org-id",
+			baseUrl: mockServerUrl,
+		});
+
+		const res = await app.request("/v1/embeddings", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: "Bearer real-token-embeddings-google-tokenid",
+			},
+			body: JSON.stringify({
+				input: [123, 456, 789],
+				model: "gemini-embedding-001",
+			}),
+		});
+
+		expect(res.status).toBe(400);
+		const json = await res.json();
+		expect(json.error?.code).toBe("unsupported_input");
+		expect(json.error?.message).toMatch(/token-ID/i);
+	});
+
+	test("/v1/embeddings google-ai-studio packs base64 encoding_format", async () => {
+		await db.insert(tables.apiKey).values({
+			id: "token-id-embeddings-google-b64",
+			token: "real-token-embeddings-google-b64",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		await db.insert(tables.providerKey).values({
+			id: "provider-key-id-embeddings-google-b64",
+			token: "google-test-key",
+			provider: "google-ai-studio",
+			organizationId: "org-id",
+			baseUrl: mockServerUrl,
+		});
+
+		const res = await app.request("/v1/embeddings", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: "Bearer real-token-embeddings-google-b64",
+			},
+			body: JSON.stringify({
+				input: "pack me",
+				model: "gemini-embedding-001",
+				dimensions: 4,
+				encoding_format: "base64",
+			}),
+		});
+
+		expect(res.status).toBe(200);
+
+		const json = await res.json();
+		expect(json.data).toHaveLength(1);
+		expect(typeof json.data[0].embedding).toBe("string");
+
+		const decoded = Buffer.from(json.data[0].embedding, "base64");
+		expect(decoded.byteLength).toBe(4 * 4);
+		const view = new DataView(
+			decoded.buffer,
+			decoded.byteOffset,
+			decoded.byteLength,
+		);
+		const floats: number[] = [];
+		for (let i = 0; i < 4; i++) {
+			floats.push(view.getFloat32(i * 4, true));
+		}
+		expect(floats.every((n) => Number.isFinite(n))).toBe(true);
+	});
+
 	test("/v1/embeddings google-ai-studio batched input", async () => {
 		await db.insert(tables.apiKey).values({
 			id: "token-id-embeddings-google-batch",

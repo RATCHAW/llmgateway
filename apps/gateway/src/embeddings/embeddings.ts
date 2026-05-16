@@ -916,6 +916,7 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		{}) as Record<string, unknown>;
 	let promptTokens: number | null = null;
 	let totalTokens: number | null = null;
+	let estimatedUsage = false;
 
 	if (isGoogleAiStudio) {
 		const upstream =
@@ -954,7 +955,12 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 			(sum, text) => sum + Math.max(1, Math.ceil(text.length / 4)),
 			0,
 		);
-		promptTokens = upstreamPromptTokens ?? estimatedTokens;
+		if (upstreamPromptTokens !== null) {
+			promptTokens = upstreamPromptTokens;
+		} else {
+			promptTokens = estimatedTokens;
+			estimatedUsage = true;
+		}
 		totalTokens = promptTokens;
 		normalizedResponse = {
 			object: "list",
@@ -1021,7 +1027,7 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		imageInputCost: null,
 		imageOutputCost: null,
 		cost,
-		estimatedCost: false,
+		estimatedCost: estimatedUsage,
 		discount: null,
 		pricingTier: null,
 		dataStorageCost: calculateDataStorageCost(
@@ -1035,5 +1041,5 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		toolResults: null,
 	});
 
-	return c.json(normalizedResponse as any);
+	return c.json(normalizedResponse);
 });

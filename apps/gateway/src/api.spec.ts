@@ -648,6 +648,7 @@ describe("api", () => {
 		expect(embeddingLog?.usedProvider).toBe("google-ai-studio");
 		expect(embeddingLog?.finishReason).toBe("stop");
 		expect(embeddingLog?.streamed).toBe(false);
+		expect(embeddingLog?.estimatedCost).toBe(true);
 		expect(Number(embeddingLog?.outputCost)).toBe(0);
 		expect(Number(embeddingLog?.inputCost)).toBeCloseTo(
 			(expectedEstimatedTokens * 0.15) / 1e6,
@@ -700,6 +701,7 @@ describe("api", () => {
 		const logs = await waitForLogs(1);
 		const embeddingLog = logs.find((log) => log.requestId === requestId);
 		expect(embeddingLog?.promptTokens).toBe(String(expectedUpstreamTokens));
+		expect(embeddingLog?.estimatedCost).toBe(false);
 		expect(Number(embeddingLog?.inputCost)).toBeCloseTo(
 			(expectedUpstreamTokens * 0.2) / 1e6,
 			12,

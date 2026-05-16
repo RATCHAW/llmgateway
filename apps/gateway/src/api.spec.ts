@@ -586,6 +586,115 @@ describe("api", () => {
 		expect(json.message).toContain("insufficient credits for data retention");
 	});
 
+	test("/v1/embeddings google-ai-studio single input", async () => {
+		await db.insert(tables.apiKey).values({
+			id: "token-id-embeddings-google",
+			token: "real-token-embeddings-google",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		await db.insert(tables.providerKey).values({
+			id: "provider-key-id-embeddings-google",
+			token: "google-test-key",
+			provider: "google-ai-studio",
+			organizationId: "org-id",
+			baseUrl: mockServerUrl,
+		});
+
+		const requestId = "embeddings-google-request-id";
+		const inputText = "Google embeddings test input.";
+		const res = await app.request("/v1/embeddings", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: "Bearer real-token-embeddings-google",
+				"x-request-id": requestId,
+			},
+			body: JSON.stringify({
+				input: inputText,
+				model: "gemini-embedding-001",
+				dimensions: 768,
+			}),
+		});
+
+		expect(res.status).toBe(200);
+
+		const json = await res.json();
+		expect(json).toHaveProperty("object", "list");
+		expect(json).toHaveProperty("model", "gemini-embedding-001");
+		expect(Array.isArray(json.data)).toBe(true);
+		expect(json.data).toHaveLength(1);
+		expect(json.data[0]).toHaveProperty("object", "embedding");
+		expect(json.data[0]).toHaveProperty("index", 0);
+		expect(Array.isArray(json.data[0].embedding)).toBe(true);
+		expect(json.data[0].embedding).toHaveLength(768);
+		expect(json.usage).toHaveProperty("prompt_tokens");
+		expect(typeof json.usage.prompt_tokens).toBe("number");
+		expect(json.usage.prompt_tokens).toBeGreaterThan(0);
+		expect(json.usage.total_tokens).toBe(json.usage.prompt_tokens);
+
+		const logs = await waitForLogs(1);
+		const embeddingLog = logs.find((log) => log.requestId === requestId);
+
+		expect(embeddingLog).toBeTruthy();
+		expect(embeddingLog?.usedModel).toBe(
+			"google-ai-studio/gemini-embedding-001",
+		);
+		expect(embeddingLog?.requestedModel).toBe("gemini-embedding-001");
+		expect(embeddingLog?.usedModelMapping).toBe("gemini-embedding-001");
+		expect(embeddingLog?.usedProvider).toBe("google-ai-studio");
+		expect(embeddingLog?.finishReason).toBe("stop");
+		expect(embeddingLog?.streamed).toBe(false);
+		expect(Number(embeddingLog?.outputCost)).toBe(0);
+		expect(Number(embeddingLog?.inputCost)).toBeCloseTo(
+			(json.usage.prompt_tokens * 0.15) / 1e6,
+			12,
+		);
+	});
+
+	test("/v1/embeddings google-ai-studio batched input", async () => {
+		await db.insert(tables.apiKey).values({
+			id: "token-id-embeddings-google-batch",
+			token: "real-token-embeddings-google-batch",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		await db.insert(tables.providerKey).values({
+			id: "provider-key-id-embeddings-google-batch",
+			token: "google-test-key",
+			provider: "google-ai-studio",
+			organizationId: "org-id",
+			baseUrl: mockServerUrl,
+		});
+
+		const inputs = ["first sentence", "second sentence", "third sentence"];
+		const res = await app.request("/v1/embeddings", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: "Bearer real-token-embeddings-google-batch",
+			},
+			body: JSON.stringify({
+				input: inputs,
+				model: "gemini-embedding-001",
+			}),
+		});
+
+		expect(res.status).toBe(200);
+
+		const json = await res.json();
+		expect(json).toHaveProperty("object", "list");
+		expect(Array.isArray(json.data)).toBe(true);
+		expect(json.data).toHaveLength(3);
+		expect(json.data[0].embedding).toHaveLength(3072);
+		expect(json.data[1]).toHaveProperty("index", 1);
+		expect(json.data[2]).toHaveProperty("index", 2);
+	});
+
 	test("/v1/moderations forwards request id upstream", async () => {
 		await db.insert(tables.apiKey).values({
 			id: "token-id-moderation-forwarded-request-id",

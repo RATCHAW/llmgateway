@@ -1853,4 +1853,27 @@ export const googleModels = [
 			},
 		],
 	},
+	{
+		id: "gemini-embedding-001",
+		name: "Gemini Embedding 001",
+		description:
+			"Google's state-of-the-art text embedding model. Default output dimension 3072; supports the `dimensions` parameter to shorten output (recommended: 768, 1536, 3072).",
+		family: "google",
+		output: ["embedding"],
+		releasedAt: new Date("2025-07-14"),
+		providers: [
+			{
+				providerId: "google-ai-studio",
+				modelName: "gemini-embedding-001",
+				inputPrice: "0.15e-6",
+				outputPrice: "0",
+				requestPrice: "0",
+				contextSize: 2048,
+				streaming: false,
+				tools: false,
+				jsonOutput: false,
+				embeddings: true,
+			},
+		],
+	},
 ] as const satisfies ModelDefinition[];

@@ -1135,6 +1135,98 @@ mockOpenAIServer.post("/v1/embeddings", async (c) => {
 	});
 });
 
+function buildGoogleEmbeddingValues(
+	text: string,
+	dimensions: number,
+	index: number,
+): number[] {
+	void text;
+	return Array.from({ length: dimensions }, (__, dim) => {
+		const base = dim % 2 === 0 ? 0.0011 : -0.0033;
+		const offset = index / 100000;
+		return base + offset;
+	});
+}
+
+mockOpenAIServer.post("/v1beta/models/:model\\:embedContent", async (c) => {
+	const body = await c.req.json();
+	const text =
+		typeof body?.content?.parts?.[0]?.text === "string"
+			? body.content.parts[0].text
+			: "";
+	const statusTrigger = extractStatusCodeTrigger(text);
+	if (statusTrigger) {
+		c.status(statusTrigger.statusCode as any);
+		return c.json(statusTrigger.errorResponse);
+	}
+	if (text.includes("TRIGGER_ERROR")) {
+		c.status(500);
+		return c.json({
+			error: {
+				code: 500,
+				message: "Internal server error",
+				status: "INTERNAL",
+			},
+		});
+	}
+	const dimensions =
+		typeof body?.outputDimensionality === "number" &&
+		body.outputDimensionality > 0
+			? body.outputDimensionality
+			: 3072;
+	return c.json({
+		embedding: {
+			values: buildGoogleEmbeddingValues(text, dimensions, 0),
+		},
+	});
+});
+
+mockOpenAIServer.post(
+	"/v1beta/models/:model\\:batchEmbedContents",
+	async (c) => {
+		const body = await c.req.json();
+		const requests = Array.isArray(body?.requests) ? body.requests : [];
+		const combinedInput = requests
+			.map(
+				(req: any) =>
+					(typeof req?.content?.parts?.[0]?.text === "string"
+						? req.content.parts[0].text
+						: "") ?? "",
+			)
+			.join(" ");
+		const statusTrigger = extractStatusCodeTrigger(combinedInput);
+		if (statusTrigger) {
+			c.status(statusTrigger.statusCode as any);
+			return c.json(statusTrigger.errorResponse);
+		}
+		if (combinedInput.includes("TRIGGER_ERROR")) {
+			c.status(500);
+			return c.json({
+				error: {
+					code: 500,
+					message: "Internal server error",
+					status: "INTERNAL",
+				},
+			});
+		}
+		const embeddings = requests.map((req: any, index: number) => {
+			const text =
+				typeof req?.content?.parts?.[0]?.text === "string"
+					? req.content.parts[0].text
+					: "";
+			const dimensions =
+				typeof req?.outputDimensionality === "number" &&
+				req.outputDimensionality > 0
+					? req.outputDimensionality
+					: 3072;
+			return {
+				values: buildGoogleEmbeddingValues(text, dimensions, index),
+			};
+		});
+		return c.json({ embeddings });
+	},
+);
+
 mockOpenAIServer.post("/v1/videos", async (c) => {
 	const contentType = c.req.header("content-type") ?? "";
 	const authorization = c.req.header("authorization") ?? "";

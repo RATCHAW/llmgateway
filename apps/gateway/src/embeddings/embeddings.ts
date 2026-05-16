@@ -565,24 +565,70 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 
 	const providerBaseUrlDefaults: Partial<Record<string, string>> = {
 		openai: "https://api.openai.com",
+		"google-ai-studio": "https://generativelanguage.googleapis.com",
 	};
 	const resolvedBaseUrl =
 		providerKey?.baseUrl ??
 		providerBaseUrlDefaults[providerId] ??
 		"https://api.openai.com";
-	const upstreamUrl = `${resolvedBaseUrl}/v1/embeddings`;
-	const requestBody: Record<string, unknown> = {
-		input,
-		model: upstreamModel,
-	};
-	if (encoding_format !== undefined) {
-		requestBody.encoding_format = encoding_format;
-	}
-	if (dimensions !== undefined) {
-		requestBody.dimensions = dimensions;
-	}
-	if (user !== undefined) {
-		requestBody.user = user;
+
+	const isGoogleAiStudio = providerId === "google-ai-studio";
+	const inputsArray: Array<string | number[]> = (() => {
+		if (Array.isArray(input)) {
+			if (input.every((item) => typeof item === "number")) {
+				return [input as number[]];
+			}
+			return input as Array<string | number[]>;
+		}
+		return [input as string];
+	})();
+
+	let upstreamUrl: string;
+	let requestBody: Record<string, unknown>;
+
+	if (isGoogleAiStudio) {
+		const endpoint =
+			inputsArray.length > 1 ? "batchEmbedContents" : "embedContent";
+		upstreamUrl = `${resolvedBaseUrl}/v1beta/models/${upstreamModel}:${endpoint}?key=${encodeURIComponent(usedToken)}`;
+		const buildSingleRequest = (item: string | number[]) => {
+			const text =
+				typeof item === "string"
+					? item
+					: `[token ids: length=${(item as number[]).length}]`;
+			const single: Record<string, unknown> = {
+				content: { parts: [{ text }] },
+			};
+			if (dimensions !== undefined) {
+				single.outputDimensionality = dimensions;
+			}
+			return single;
+		};
+
+		if (endpoint === "batchEmbedContents") {
+			requestBody = {
+				requests: inputsArray.map((item) => ({
+					model: `models/${upstreamModel}`,
+					...buildSingleRequest(item),
+				})),
+			};
+		} else {
+			requestBody = buildSingleRequest(inputsArray[0]);
+		}
+	} else {
+		upstreamUrl = `${resolvedBaseUrl}/v1/embeddings`;
+		requestBody = {
+			input,
+			model: upstreamModel,
+		};
+		if (encoding_format !== undefined) {
+			requestBody.encoding_format = encoding_format;
+		}
+		if (dimensions !== undefined) {
+			requestBody.dimensions = dimensions;
+		}
+		if (user !== undefined) {
+			requestBody.user = user;
+		}
 	}
 
 	const baseLogEntry = createLogEntry({
@@ -838,27 +884,73 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		reportTrackedKeySuccess(providerKey.id);
 	}
 
-	const usage =
-		upstreamJson &&
-		typeof upstreamJson === "object" &&
-		"usage" in (upstreamJson as Record<string, unknown>)
-			? ((upstreamJson as Record<string, unknown>).usage as
-					| Record<string, unknown>
-					| undefined)
-			: undefined;
-	const promptTokensRaw = usage?.prompt_tokens;
-	const totalTokensRaw = usage?.total_tokens;
-	const promptTokens =
-		typeof promptTokensRaw === "number" ? promptTokensRaw : null;
-	const totalTokens =
-		typeof totalTokensRaw === "number" ? totalTokensRaw : promptTokens;
-	if (promptTokens === null) {
-		logger.warn("Embeddings response missing usage.prompt_tokens", {
-			requestId,
-			provider: providerId,
-			model: upstreamModel,
-		});
+	let normalizedResponse: Record<string, unknown> = (upstreamJson ??
+		{}) as Record<string, unknown>;
+	let promptTokens: number | null = null;
+	let totalTokens: number | null = null;
+
+	if (isGoogleAiStudio) {
+		const upstream =
+			upstreamJson && typeof upstreamJson === "object"
+				? (upstreamJson as Record<string, unknown>)
+				: {};
+		const rawEmbeddings: Array<Record<string, unknown>> = (() => {
+			if (Array.isArray(upstream.embeddings)) {
+				return upstream.embeddings as Array<Record<string, unknown>>;
+			}
+			if (upstream.embedding && typeof upstream.embedding === "object") {
+				return [upstream.embedding as Record<string, unknown>];
+			}
+			return [];
+		})();
+		const data = rawEmbeddings.map((item, index) => ({
+			object: "embedding" as const,
+			index,
+			embedding: Array.isArray(item.values) ? (item.values as number[]) : [],
+		}));
+		const estimatedTokens = inputsArray.reduce((sum, item) => {
+			const chars =
+				typeof item === "string"
+					? item.length
+					: Array.isArray(item)
+						? item.length
+						: 0;
+			return sum + Math.max(1, Math.ceil(chars / 4));
+		}, 0);
+		promptTokens = estimatedTokens;
+		totalTokens = estimatedTokens;
+		normalizedResponse = {
+			object: "list",
+			data,
+			model: requestedModel,
+			usage: {
+				prompt_tokens: promptTokens,
+				total_tokens: totalTokens,
+			},
+		};
+	} else {
+		const usage =
+			upstreamJson &&
+			typeof upstreamJson === "object" &&
+			"usage" in (upstreamJson as Record<string, unknown>)
+				? ((upstreamJson as Record<string, unknown>).usage as
+						| Record<string, unknown>
+						| undefined)
+				: undefined;
+		const promptTokensRaw = usage?.prompt_tokens;
+		const totalTokensRaw = usage?.total_tokens;
+		promptTokens = typeof promptTokensRaw === "number" ? promptTokensRaw : null;
+		totalTokens =
+			typeof totalTokensRaw === "number" ? totalTokensRaw : promptTokens;
+		if (promptTokens === null) {
+			logger.warn("Embeddings response missing usage.prompt_tokens", {
+				requestId,
+				provider: providerId,
+				model: upstreamModel,
+			});
+		}
 	}
+
 	const inputPrice = Number(mapping.inputPrice ?? "0");
 	const inputCost = promptTokens !== null ? promptTokens * inputPrice : 0;
 	const requestCost = Number(mapping.requestPrice ?? "0");
@@ -870,7 +962,7 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		timeToFirstToken: null,
 		timeToFirstReasoningToken: null,
 		responseSize,
-		content: getResponseContent(upstreamJson),
+		content: getResponseContent(normalizedResponse),
 		reasoningContent: null,
 		finishReason: "stop",
 		promptTokens: promptTokens !== null ? promptTokens.toString() : null,
@@ -906,5 +998,5 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		toolResults: null,
 	});
 
-	return c.json(upstreamJson as any);
+	return c.json(normalizedResponse as any);
 });

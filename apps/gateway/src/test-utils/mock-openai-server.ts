@@ -1148,6 +1148,18 @@ function buildGoogleEmbeddingValues(
 	});
 }
 
+// Mirror real Google behavior: gemini-embedding-2 returns usageMetadata,
+// gemini-embedding-001 does not. This lets us exercise both code paths.
+function googleReturnsUsageMetadata(modelName: string): boolean {
+	return modelName !== "gemini-embedding-001";
+}
+
+function googleTokensFor(text: string): number {
+	// Deliberately distinct from the gateway's ceil(chars/4) fallback so
+	// tests can detect when upstream usage is used vs. estimated.
+	return Math.max(1, Math.floor(text.length / 5));
+}
+
 mockOpenAIServer.post("/v1beta/models/:model\\:embedContent", async (c) => {
 	const body = await c.req.json();
 	const text =
@@ -1174,11 +1186,16 @@ mockOpenAIServer.post("/v1beta/models/:model\\:embedContent", async (c) => {
 		body.outputDimensionality > 0
 			? body.outputDimensionality
 			: 3072;
-	return c.json({
+	const modelName = c.req.param("model") ?? "";
+	const response: Record<string, unknown> = {
 		embedding: {
 			values: buildGoogleEmbeddingValues(text, dimensions, 0),
 		},
-	});
+	};
+	if (googleReturnsUsageMetadata(modelName)) {
+		response.usageMetadata = { promptTokenCount: googleTokensFor(text) };
+	}
+	return c.json(response);
 });
 
 mockOpenAIServer.post(
@@ -1223,7 +1240,23 @@ mockOpenAIServer.post(
 				values: buildGoogleEmbeddingValues(text, dimensions, index),
 			};
 		});
-		return c.json({ embeddings });
+		const modelName = c.req.param("model") ?? "";
+		const response: Record<string, unknown> = { embeddings };
+		if (googleReturnsUsageMetadata(modelName)) {
+			response.usageMetadata = {
+				promptTokenCount: requests.reduce(
+					(sum: number, req: any) =>
+						sum +
+						googleTokensFor(
+							typeof req?.content?.parts?.[0]?.text === "string"
+								? req.content.parts[0].text
+								: "",
+						),
+					0,
+				),
+			};
+		}
+		return c.json(response);
 	},
 );
 

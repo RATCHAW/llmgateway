@@ -630,10 +630,11 @@ describe("api", () => {
 		expect(json.data[0]).toHaveProperty("index", 0);
 		expect(Array.isArray(json.data[0].embedding)).toBe(true);
 		expect(json.data[0].embedding).toHaveLength(768);
-		expect(json.usage).toHaveProperty("prompt_tokens");
-		expect(typeof json.usage.prompt_tokens).toBe("number");
-		expect(json.usage.prompt_tokens).toBeGreaterThan(0);
-		expect(json.usage.total_tokens).toBe(json.usage.prompt_tokens);
+		// gemini-embedding-001 does not return usageMetadata, so the gateway
+		// falls back to the char-based estimate ceil(chars/4).
+		const expectedEstimatedTokens = Math.ceil(inputText.length / 4);
+		expect(json.usage.prompt_tokens).toBe(expectedEstimatedTokens);
+		expect(json.usage.total_tokens).toBe(expectedEstimatedTokens);
 
 		const logs = await waitForLogs(1);
 		const embeddingLog = logs.find((log) => log.requestId === requestId);
@@ -649,7 +650,58 @@ describe("api", () => {
 		expect(embeddingLog?.streamed).toBe(false);
 		expect(Number(embeddingLog?.outputCost)).toBe(0);
 		expect(Number(embeddingLog?.inputCost)).toBeCloseTo(
-			(json.usage.prompt_tokens * 0.15) / 1e6,
+			(expectedEstimatedTokens * 0.15) / 1e6,
+			12,
+		);
+	});
+
+	test("/v1/embeddings google-ai-studio uses upstream usageMetadata when present", async () => {
+		await db.insert(tables.apiKey).values({
+			id: "token-id-embeddings-google-v2",
+			token: "real-token-embeddings-google-v2",
+			projectId: "project-id",
+			description: "Test API Key",
+			createdBy: "user-id",
+		});
+
+		await db.insert(tables.providerKey).values({
+			id: "provider-key-id-embeddings-google-v2",
+			token: "google-test-key",
+			provider: "google-ai-studio",
+			organizationId: "org-id",
+			baseUrl: mockServerUrl,
+		});
+
+		const requestId = "embeddings-google-v2-request-id";
+		// 30 chars -> char estimate ceil(30/4)=8, mock floor(30/5)=6.
+		const inputText = "Six tokens via upstream metadata";
+		const res = await app.request("/v1/embeddings", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: "Bearer real-token-embeddings-google-v2",
+				"x-request-id": requestId,
+			},
+			body: JSON.stringify({
+				input: inputText,
+				model: "gemini-embedding-2",
+			}),
+		});
+
+		expect(res.status).toBe(200);
+		const json = await res.json();
+
+		const expectedUpstreamTokens = Math.floor(inputText.length / 5);
+		const estimatedTokens = Math.ceil(inputText.length / 4);
+		expect(expectedUpstreamTokens).not.toBe(estimatedTokens);
+		expect(json.usage.prompt_tokens).toBe(expectedUpstreamTokens);
+		expect(json.usage.total_tokens).toBe(expectedUpstreamTokens);
+
+		const logs = await waitForLogs(1);
+		const embeddingLog = logs.find((log) => log.requestId === requestId);
+		expect(embeddingLog?.promptTokens).toBe(String(expectedUpstreamTokens));
+		expect(Number(embeddingLog?.inputCost)).toBeCloseTo(
+			(expectedUpstreamTokens * 0.2) / 1e6,
 			12,
 		);
 	});

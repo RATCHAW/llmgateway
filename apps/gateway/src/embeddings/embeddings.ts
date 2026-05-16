@@ -942,12 +942,20 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 				embedding: wantsBase64 ? packFloat32Base64(values) : values,
 			};
 		});
+		const upstreamUsage =
+			upstream.usageMetadata && typeof upstream.usageMetadata === "object"
+				? (upstream.usageMetadata as Record<string, unknown>)
+				: undefined;
+		const upstreamPromptTokens =
+			typeof upstreamUsage?.promptTokenCount === "number"
+				? upstreamUsage.promptTokenCount
+				: null;
 		const estimatedTokens = googleInputs.reduce(
 			(sum, text) => sum + Math.max(1, Math.ceil(text.length / 4)),
 			0,
 		);
-		promptTokens = estimatedTokens;
-		totalTokens = estimatedTokens;
+		promptTokens = upstreamPromptTokens ?? estimatedTokens;
+		totalTokens = promptTokens;
 		normalizedResponse = {
 			object: "list",
 			data,

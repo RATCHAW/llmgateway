@@ -300,7 +300,7 @@ export function DashboardClient({
 									}
 									disabledMessage={
 										planLimits
-											? `${planLimits.plan === "pro" ? "Pro" : "Free"} plan allows maximum ${planLimits.maxKeys} API keys per project`
+											? `${planLimits.plan === "enterprise" ? "Enterprise" : planLimits.plan === "pro" ? "Pro" : "Free"} plan allows maximum ${planLimits.maxKeys} API keys per project`
 											: undefined
 									}
 								>

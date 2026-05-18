@@ -501,8 +501,7 @@ keysApi.openapi(create, async (c) => {
 		},
 	});
 
-	// Check API key limit
-	const maxApiKeys = 20;
+	const maxApiKeys = project.organization.plan === "enterprise" ? 500 : 20;
 
 	if (existingApiKeys.length >= maxApiKeys) {
 		throw new HTTPException(400, {
@@ -578,7 +577,7 @@ const list = createRoute({
 							.object({
 								currentCount: z.number(),
 								maxKeys: z.number(),
-								plan: z.enum(["free", "pro"]),
+								plan: z.enum(["free", "pro", "enterprise"]),
 							})
 							.optional(),
 						userRole: z.enum(["owner", "admin", "developer"]),
@@ -685,7 +684,7 @@ keysApi.openapi(list, async (c) => {
 	// Get organization plan info if projectId is specified
 	let currentCount = 0;
 	let maxKeys = 0;
-	let plan: "free" | "pro" = "free";
+	let plan: "free" | "pro" | "enterprise" = "free";
 
 	if (projectId) {
 		const project = await db.query.project.findFirst({
@@ -700,8 +699,8 @@ keysApi.openapi(list, async (c) => {
 		});
 
 		if (project?.organization) {
-			plan = project.organization.plan as "free" | "pro";
-			maxKeys = plan === "pro" ? 20 : 5;
+			plan = project.organization.plan as "free" | "pro" | "enterprise";
+			maxKeys = plan === "enterprise" ? 500 : plan === "pro" ? 20 : 5;
 			currentCount = apiKeys.filter((key) => key.status !== "deleted").length;
 		}
 	}

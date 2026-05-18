@@ -341,7 +341,6 @@ projects.openapi(createProject, async (c) => {
 		});
 	}
 
-	// Check project limits based on plan
 	const existingProjects = await db.query.project.findMany({
 		where: {
 			organizationId: {
@@ -354,7 +353,8 @@ projects.openapi(createProject, async (c) => {
 	});
 
 	const projectCount = existingProjects.length;
-	const projectLimit = 10;
+	const projectLimit =
+		userOrganization.organization?.plan === "enterprise" ? 250 : 10;
 
 	if (projectCount >= projectLimit) {
 		throw new HTTPException(403, {

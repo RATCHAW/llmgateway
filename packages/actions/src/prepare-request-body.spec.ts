@@ -1496,6 +1496,39 @@ describe("prepareRequestBody - Alibaba cache_control", () => {
 			type: "ephemeral",
 		});
 	});
+
+	test("drops cache_control entirely when stripping ttl leaves an empty marker", async () => {
+		const requestBody = (await prepareRequestBody(
+			"alibaba",
+			"qwen-plus",
+			[
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "Caller forgot the type field.",
+							cache_control: { ttl: "1h" } as any,
+						},
+					],
+				},
+			],
+			false,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			false,
+			false,
+		)) as any;
+
+		expect("cache_control" in requestBody.messages[0].content[0]).toBe(false);
+	});
 });
 
 // Sibling to the Anthropic max_tokens regression tests above. Every provider

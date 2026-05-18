@@ -1029,6 +1029,14 @@ export async function prepareRequestBody(
 				) {
 					mutated = true;
 					const { ttl: _ttl, ...ccRest } = cc;
+					// If stripping `ttl` leaves an empty/malformed marker (e.g. the
+					// caller passed only `{ttl: "1h"}` with no `type`), drop the
+					// `cache_control` field entirely rather than forwarding `{}`,
+					// which Alibaba would either ignore or reject as malformed.
+					if (Object.keys(ccRest).length === 0 || !("type" in asRecord)) {
+						const { cache_control: _omit, ...rest } = asRecord;
+						return rest as unknown as typeof part;
+					}
 					return {
 						...asRecord,
 						cache_control: ccRest,

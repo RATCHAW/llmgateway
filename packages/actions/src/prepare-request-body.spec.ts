@@ -1412,3 +1412,88 @@ describe("prepareRequestBody - reasoning.max_tokens forwarding", () => {
 		);
 	});
 });
+
+describe("prepareRequestBody - Alibaba cache_control", () => {
+	test("forwards cache_control: {type: 'ephemeral'} unchanged", async () => {
+		const requestBody = (await prepareRequestBody(
+			"alibaba",
+			"qwen-plus",
+			[
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "Cache this content.",
+							cache_control: { type: "ephemeral" },
+						},
+					],
+				},
+			],
+			false,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			false,
+			false,
+		)) as any;
+
+		expect(requestBody.messages[0].content[0].cache_control).toEqual({
+			type: "ephemeral",
+		});
+	});
+
+	test("strips ttl from cache_control because Alibaba only supports 5m", async () => {
+		const requestBody = (await prepareRequestBody(
+			"alibaba",
+			"qwen-plus",
+			[
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "Cache this content.",
+							cache_control: { type: "ephemeral", ttl: "1h" },
+						},
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "And this.",
+							cache_control: { type: "ephemeral", ttl: "5m" },
+						},
+					],
+				},
+			],
+			false,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			false,
+			false,
+		)) as any;
+
+		expect(requestBody.messages[0].content[0].cache_control).toEqual({
+			type: "ephemeral",
+		});
+		expect(requestBody.messages[1].content[0].cache_control).toEqual({
+			type: "ephemeral",
+		});
+	});
+});

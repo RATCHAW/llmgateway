@@ -1102,6 +1102,21 @@ chat.openapi(completions, async (c) => {
 		});
 	}
 
+	// Detect whether the caller marked any content with `cache_control` for an
+	// explicit-cache flow. Providers with a split read rate (e.g., Alibaba: 10%
+	// explicit vs. 20% implicit) consume this flag in calculateCosts to bill
+	// cached read tokens at the right rate.
+	const explicitCacheUsed = messages.some(
+		(m) =>
+			Array.isArray(m.content) &&
+			m.content.some(
+				(part) =>
+					part &&
+					typeof part === "object" &&
+					(part as { cache_control?: unknown }).cache_control !== undefined,
+			),
+	);
+
 	// Extract reasoning.effort and reasoning.max_tokens for unified reasoning configuration
 	const reasoning_object_effort = validationResult.data.reasoning?.effort;
 	const reasoning_max_tokens = validationResult.data.reasoning?.max_tokens;
@@ -3742,6 +3757,7 @@ chat.openapi(completions, async (c) => {
 						cacheWriteTokens,
 						cacheWrite1hTokens,
 						audioInputTokens,
+						explicitCacheUsed,
 					},
 				);
 
@@ -3914,6 +3930,7 @@ chat.openapi(completions, async (c) => {
 								?.ephemeral_1h_input_tokens ?? null,
 						audioInputTokens:
 							cachedResponse.usage?.prompt_tokens_details?.audio_tokens ?? null,
+						explicitCacheUsed,
 					},
 				);
 
@@ -4548,7 +4565,7 @@ chat.openapi(completions, async (c) => {
 						image_config?.image_quality,
 						null,
 						null,
-						undefined,
+						{ explicitCacheUsed },
 						true,
 					);
 					streamingCosts.dataStorageCost = toDataStorageCostNumber(
@@ -6375,6 +6392,7 @@ chat.openapi(completions, async (c) => {
 											cacheWrite1hTokens: cacheCreation1hTokens,
 											audioInputTokens,
 											cachedAudioInputTokens,
+											explicitCacheUsed,
 										},
 									);
 									streamingCosts.dataStorageCost = toDataStorageCostNumber(
@@ -7674,6 +7692,7 @@ chat.openapi(completions, async (c) => {
 											cacheWrite1hTokens: cacheCreation1hTokens,
 											audioInputTokens,
 											cachedAudioInputTokens,
+											explicitCacheUsed,
 										},
 										finishReason === "content_filter",
 									);
@@ -7993,6 +8012,7 @@ chat.openapi(completions, async (c) => {
 										cacheWrite1hTokens: cacheCreation1hTokens,
 										audioInputTokens,
 										cachedAudioInputTokens,
+										explicitCacheUsed,
 									},
 									finishReason === "content_filter",
 								));
@@ -9779,6 +9799,7 @@ chat.openapi(completions, async (c) => {
 			cacheWrite1hTokens: cacheCreation1hTokens,
 			audioInputTokens,
 			cachedAudioInputTokens,
+			explicitCacheUsed,
 		},
 		finishReason === "content_filter",
 	);

@@ -2,6 +2,8 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 
+import type { Context } from "hono";
+
 // Create a mock OpenAI API server
 export const mockOpenAIServer = new Hono();
 
@@ -1135,6 +1137,199 @@ mockOpenAIServer.post("/v1/embeddings", async (c) => {
 	});
 });
 
+function buildGoogleEmbeddingValues(
+	text: string,
+	dimensions: number,
+	index: number,
+): number[] {
+	void text;
+	return Array.from({ length: dimensions }, (__, dim) => {
+		const base = dim % 2 === 0 ? 0.0011 : -0.0033;
+		const offset = index / 100000;
+		return base + offset;
+	});
+}
+
+// Mirror real Google behavior: gemini-embedding-2 returns usageMetadata,
+// gemini-embedding-001 does not. This lets us exercise both code paths.
+function googleReturnsUsageMetadata(modelName: string): boolean {
+	return modelName !== "gemini-embedding-001";
+}
+
+function googleTokensFor(text: string): number {
+	// Deliberately distinct from the gateway's ceil(chars/4) fallback so
+	// tests can detect when upstream usage is used vs. estimated.
+	return Math.max(1, Math.floor(text.length / 5));
+}
+
+function parseGoogleAiStudioPath(
+	path: string,
+): { modelName: string; action: string } | null {
+	const match = path.match(/^\/v1beta\/models\/([^/:]+):([^/]+)$/);
+	if (!match) {
+		return null;
+	}
+	return { modelName: match[1], action: match[2] };
+}
+
+async function handleGoogleEmbedContent(c: Context, modelName: string) {
+	const body = await c.req.json();
+	const text =
+		typeof body?.content?.parts?.[0]?.text === "string"
+			? body.content.parts[0].text
+			: "";
+	const statusTrigger = extractStatusCodeTrigger(text);
+	if (statusTrigger) {
+		c.status(statusTrigger.statusCode as any);
+		return c.json(statusTrigger.errorResponse);
+	}
+	if (text.includes("TRIGGER_ERROR")) {
+		c.status(500);
+		return c.json({
+			error: {
+				code: 500,
+				message: "Internal server error",
+				status: "INTERNAL",
+			},
+		});
+	}
+	const dimensions =
+		typeof body?.outputDimensionality === "number" &&
+		body.outputDimensionality > 0
+			? body.outputDimensionality
+			: 3072;
+	const response: Record<string, unknown> = {
+		embedding: {
+			values: buildGoogleEmbeddingValues(text, dimensions, 0),
+		},
+	};
+	if (googleReturnsUsageMetadata(modelName)) {
+		response.usageMetadata = { promptTokenCount: googleTokensFor(text) };
+	}
+	return c.json(response);
+}
+
+async function handleGoogleBatchEmbedContents(c: Context, modelName: string) {
+	const body = await c.req.json();
+	const requests = Array.isArray(body?.requests) ? body.requests : [];
+	const combinedInput = requests
+		.map(
+			(req: any) =>
+				(typeof req?.content?.parts?.[0]?.text === "string"
+					? req.content.parts[0].text
+					: "") ?? "",
+		)
+		.join(" ");
+	const statusTrigger = extractStatusCodeTrigger(combinedInput);
+	if (statusTrigger) {
+		c.status(statusTrigger.statusCode as any);
+		return c.json(statusTrigger.errorResponse);
+	}
+	if (combinedInput.includes("TRIGGER_ERROR")) {
+		c.status(500);
+		return c.json({
+			error: {
+				code: 500,
+				message: "Internal server error",
+				status: "INTERNAL",
+			},
+		});
+	}
+	const embeddings = requests.map((req: any, index: number) => {
+		const text =
+			typeof req?.content?.parts?.[0]?.text === "string"
+				? req.content.parts[0].text
+				: "";
+		const dimensions =
+			typeof req?.outputDimensionality === "number" &&
+			req.outputDimensionality > 0
+				? req.outputDimensionality
+				: 3072;
+		return {
+			values: buildGoogleEmbeddingValues(text, dimensions, index),
+		};
+	});
+	const response: Record<string, unknown> = { embeddings };
+	if (googleReturnsUsageMetadata(modelName)) {
+		response.usageMetadata = {
+			promptTokenCount: requests.reduce(
+				(sum: number, req: any) =>
+					sum +
+					googleTokensFor(
+						typeof req?.content?.parts?.[0]?.text === "string"
+							? req.content.parts[0].text
+							: "",
+					),
+				0,
+			),
+		};
+	}
+	return c.json(response);
+}
+
+async function handleGoogleGenerateContent(c: Context) {
+	const body = await c.req.json();
+	const shouldError = body.contents?.some?.((content: any) =>
+		content.parts?.some?.((part: any) =>
+			part.text?.includes?.("TRIGGER_ERROR"),
+		),
+	);
+	if (shouldError) {
+		c.status(500);
+		return c.json({
+			error: {
+				code: 500,
+				message: "Internal server error",
+				status: "INTERNAL",
+			},
+		});
+	}
+	const userMessage =
+		body.contents?.find?.((entry: any) => entry.role === "user")?.parts?.[0]
+			?.text ?? "";
+	return c.json({
+		candidates: [
+			{
+				content: {
+					parts: [
+						{
+							text: `Hello! I received your message: "${userMessage}". This is a mock Google AI response.`,
+						},
+					],
+					role: "model",
+				},
+				finishReason: "STOP",
+				index: 0,
+			},
+		],
+		usageMetadata: {
+			promptTokenCount: 10,
+			candidatesTokenCount: 20,
+			totalTokenCount: 30,
+		},
+	});
+}
+
+mockOpenAIServer.post("/v1beta/models/:rest{.+}", async (c) => {
+	const parsed = parseGoogleAiStudioPath(c.req.path);
+	if (!parsed) {
+		c.status(404);
+		return c.json({ error: { code: 404, message: "Not found" } });
+	}
+	const { modelName, action } = parsed;
+	if (action === "embedContent") {
+		return await handleGoogleEmbedContent(c, modelName);
+	}
+	if (action === "batchEmbedContents") {
+		return await handleGoogleBatchEmbedContents(c, modelName);
+	}
+	if (action === "generateContent") {
+		return await handleGoogleGenerateContent(c);
+	}
+	c.status(404);
+	return c.json({ error: { code: 404, message: "Not found" } });
+});
+
 mockOpenAIServer.post("/v1/videos", async (c) => {
 	const contentType = c.req.header("content-type") ?? "";
 	const authorization = c.req.header("authorization") ?? "";
@@ -1934,57 +2129,6 @@ mockOpenAIServer.post(
 		});
 	},
 );
-
-// Handle Google AI Studio generateContent endpoint (Gemini models)
-mockOpenAIServer.post("/v1beta/models/:model\\:generateContent", async (c) => {
-	const body = await c.req.json();
-
-	// Check if this request should trigger an error response
-	const shouldError = body.contents?.some?.((content: any) =>
-		content.parts?.some?.((part: any) =>
-			part.text?.includes?.("TRIGGER_ERROR"),
-		),
-	);
-
-	if (shouldError) {
-		c.status(500);
-		return c.json({
-			error: {
-				code: 500,
-				message: "Internal server error",
-				status: "INTERNAL",
-			},
-		});
-	}
-
-	// Get the user's message
-	const userMessage =
-		body.contents?.find?.((c: any) => c.role === "user")?.parts?.[0]?.text ??
-		"";
-
-	// Return Google AI Studio format response
-	return c.json({
-		candidates: [
-			{
-				content: {
-					parts: [
-						{
-							text: `Hello! I received your message: "${userMessage}". This is a mock Google AI response.`,
-						},
-					],
-					role: "model",
-				},
-				finishReason: "STOP",
-				index: 0,
-			},
-		],
-		usageMetadata: {
-			promptTokenCount: 10,
-			candidatesTokenCount: 20,
-			totalTokenCount: 30,
-		},
-	});
-});
 
 mockOpenAIServer.post("/model/:model/converse", async (c) => {
 	const body = await c.req.json();

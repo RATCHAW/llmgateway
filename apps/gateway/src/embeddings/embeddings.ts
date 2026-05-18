@@ -177,6 +177,15 @@ function getErrorFinishReason(status: number): string {
 	return status >= 500 ? "upstream_error" : "client_error";
 }
 
+function packFloat32Base64(values: number[]): string {
+	const buffer = new ArrayBuffer(values.length * 4);
+	const view = new DataView(buffer);
+	for (let i = 0; i < values.length; i++) {
+		view.setFloat32(i * 4, values[i], true);
+	}
+	return Buffer.from(buffer).toString("base64");
+}
+
 function findEmbeddingMapping(modelId: string): {
 	mapping: ProviderModelMapping;
 	modelDef: ModelDefinition;
@@ -422,6 +431,33 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 	const { mapping, modelDef, modelDefId } = match;
 	const upstreamModel = mapping.modelName;
 	const providerId = mapping.providerId;
+
+	const isTokenIdInput = (() => {
+		if (!Array.isArray(input)) {
+			return false;
+		}
+		if (input.every((item) => typeof item === "number")) {
+			return true;
+		}
+		return input.some(
+			(item) => Array.isArray(item) && item.every((n) => typeof n === "number"),
+		);
+	})();
+
+	if (isTokenIdInput && providerId === "google-ai-studio") {
+		return c.json(
+			{
+				error: {
+					message:
+						"Provider google-ai-studio does not support token-ID inputs for embeddings. Pass a string or array of strings instead.",
+					type: "invalid_request_error",
+					param: "input",
+					code: "unsupported_input",
+				},
+			},
+			400,
+		);
+	}
 	const startedAt = Date.now();
 	const source = validateSource(
 		c.req.header("x-source"),
@@ -565,24 +601,62 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 
 	const providerBaseUrlDefaults: Partial<Record<string, string>> = {
 		openai: "https://api.openai.com",
+		"google-ai-studio": "https://generativelanguage.googleapis.com",
 	};
 	const resolvedBaseUrl =
 		providerKey?.baseUrl ??
 		providerBaseUrlDefaults[providerId] ??
 		"https://api.openai.com";
-	const upstreamUrl = `${resolvedBaseUrl}/v1/embeddings`;
-	const requestBody: Record<string, unknown> = {
-		input,
-		model: upstreamModel,
-	};
-	if (encoding_format !== undefined) {
-		requestBody.encoding_format = encoding_format;
-	}
-	if (dimensions !== undefined) {
-		requestBody.dimensions = dimensions;
-	}
-	if (user !== undefined) {
-		requestBody.user = user;
+
+	const isGoogleAiStudio = providerId === "google-ai-studio";
+	const googleInputs: string[] = isGoogleAiStudio
+		? Array.isArray(input)
+			? (input as string[])
+			: [input as string]
+		: [];
+
+	let upstreamUrl: string;
+	let requestBody: Record<string, unknown>;
+
+	if (isGoogleAiStudio) {
+		const endpoint =
+			googleInputs.length > 1 ? "batchEmbedContents" : "embedContent";
+		upstreamUrl = `${resolvedBaseUrl}/v1beta/models/${upstreamModel}:${endpoint}?key=${encodeURIComponent(usedToken)}`;
+		const buildSingleRequest = (text: string) => {
+			const single: Record<string, unknown> = {
+				content: { parts: [{ text }] },
+			};
+			if (dimensions !== undefined) {
+				single.outputDimensionality = dimensions;
+			}
+			return single;
+		};
+
+		if (endpoint === "batchEmbedContents") {
+			requestBody = {
+				requests: googleInputs.map((text) => ({
+					model: `models/${upstreamModel}`,
+					...buildSingleRequest(text),
+				})),
+			};
+		} else {
+			requestBody = buildSingleRequest(googleInputs[0]);
+		}
+	} else {
+		upstreamUrl = `${resolvedBaseUrl}/v1/embeddings`;
+		requestBody = {
+			input,
+			model: upstreamModel,
+		};
+		if (encoding_format !== undefined) {
+			requestBody.encoding_format = encoding_format;
+		}
+		if (dimensions !== undefined) {
+			requestBody.dimensions = dimensions;
+		}
+		if (user !== undefined) {
+			requestBody.user = user;
+		}
 	}
 
 	const baseLogEntry = createLogEntry({
@@ -838,27 +912,88 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		reportTrackedKeySuccess(providerKey.id);
 	}
 
-	const usage =
-		upstreamJson &&
-		typeof upstreamJson === "object" &&
-		"usage" in (upstreamJson as Record<string, unknown>)
-			? ((upstreamJson as Record<string, unknown>).usage as
-					| Record<string, unknown>
-					| undefined)
-			: undefined;
-	const promptTokensRaw = usage?.prompt_tokens;
-	const totalTokensRaw = usage?.total_tokens;
-	const promptTokens =
-		typeof promptTokensRaw === "number" ? promptTokensRaw : null;
-	const totalTokens =
-		typeof totalTokensRaw === "number" ? totalTokensRaw : promptTokens;
-	if (promptTokens === null) {
-		logger.warn("Embeddings response missing usage.prompt_tokens", {
-			requestId,
-			provider: providerId,
-			model: upstreamModel,
+	let normalizedResponse: Record<string, unknown> = (upstreamJson ??
+		{}) as Record<string, unknown>;
+	let promptTokens: number | null = null;
+	let totalTokens: number | null = null;
+	let estimatedUsage = false;
+
+	if (isGoogleAiStudio) {
+		const upstream =
+			upstreamJson && typeof upstreamJson === "object"
+				? (upstreamJson as Record<string, unknown>)
+				: {};
+		const rawEmbeddings: Array<Record<string, unknown>> = (() => {
+			if (Array.isArray(upstream.embeddings)) {
+				return upstream.embeddings as Array<Record<string, unknown>>;
+			}
+			if (upstream.embedding && typeof upstream.embedding === "object") {
+				return [upstream.embedding as Record<string, unknown>];
+			}
+			return [];
+		})();
+		const wantsBase64 = encoding_format === "base64";
+		const data = rawEmbeddings.map((item, index) => {
+			const values = Array.isArray(item.values)
+				? (item.values as number[])
+				: [];
+			return {
+				object: "embedding" as const,
+				index,
+				embedding: wantsBase64 ? packFloat32Base64(values) : values,
+			};
 		});
+		const upstreamUsage =
+			upstream.usageMetadata && typeof upstream.usageMetadata === "object"
+				? (upstream.usageMetadata as Record<string, unknown>)
+				: undefined;
+		const upstreamPromptTokens =
+			typeof upstreamUsage?.promptTokenCount === "number"
+				? upstreamUsage.promptTokenCount
+				: null;
+		const estimatedTokens = googleInputs.reduce(
+			(sum, text) => sum + Math.max(1, Math.ceil(text.length / 4)),
+			0,
+		);
+		if (upstreamPromptTokens !== null) {
+			promptTokens = upstreamPromptTokens;
+		} else {
+			promptTokens = estimatedTokens;
+			estimatedUsage = true;
+		}
+		totalTokens = promptTokens;
+		normalizedResponse = {
+			object: "list",
+			data,
+			model: requestedModel,
+			usage: {
+				prompt_tokens: promptTokens,
+				total_tokens: totalTokens,
+			},
+		};
+	} else {
+		const usage =
+			upstreamJson &&
+			typeof upstreamJson === "object" &&
+			"usage" in (upstreamJson as Record<string, unknown>)
+				? ((upstreamJson as Record<string, unknown>).usage as
+						| Record<string, unknown>
+						| undefined)
+				: undefined;
+		const promptTokensRaw = usage?.prompt_tokens;
+		const totalTokensRaw = usage?.total_tokens;
+		promptTokens = typeof promptTokensRaw === "number" ? promptTokensRaw : null;
+		totalTokens =
+			typeof totalTokensRaw === "number" ? totalTokensRaw : promptTokens;
+		if (promptTokens === null) {
+			logger.warn("Embeddings response missing usage.prompt_tokens", {
+				requestId,
+				provider: providerId,
+				model: upstreamModel,
+			});
+		}
 	}
+
 	const inputPrice = Number(mapping.inputPrice ?? "0");
 	const inputCost = promptTokens !== null ? promptTokens * inputPrice : 0;
 	const requestCost = Number(mapping.requestPrice ?? "0");
@@ -870,7 +1005,7 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		timeToFirstToken: null,
 		timeToFirstReasoningToken: null,
 		responseSize,
-		content: getResponseContent(upstreamJson),
+		content: getResponseContent(normalizedResponse),
 		reasoningContent: null,
 		finishReason: "stop",
 		promptTokens: promptTokens !== null ? promptTokens.toString() : null,
@@ -892,7 +1027,7 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		imageInputCost: null,
 		imageOutputCost: null,
 		cost,
-		estimatedCost: false,
+		estimatedCost: estimatedUsage,
 		discount: null,
 		pricingTier: null,
 		dataStorageCost: calculateDataStorageCost(
@@ -906,5 +1041,5 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		toolResults: null,
 	});
 
-	return c.json(upstreamJson as any);
+	return c.json(normalizedResponse);
 });

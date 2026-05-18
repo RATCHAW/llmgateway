@@ -5705,6 +5705,7 @@ export interface paths {
                                     azure_ai_foundry_api_version?: string;
                                     /** @enum {string} */
                                     alibaba_region?: "singapore" | "us-virginia" | "cn-beijing";
+                                    vertex_openai_project_id?: string;
                                 } | null;
                                 /** @enum {string|null} */
                                 status: "active" | "inactive" | "deleted" | null;
@@ -5746,6 +5747,7 @@ export interface paths {
                             /** @enum {string} */
                             alibaba_region?: "singapore" | "us-virginia" | "cn-beijing";
                             google_vertex_project_id?: string;
+                            vertex_openai_project_id?: string;
                         };
                         organizationId: string;
                     };
@@ -5779,6 +5781,7 @@ export interface paths {
                                     azure_ai_foundry_api_version?: string;
                                     /** @enum {string} */
                                     alibaba_region?: "singapore" | "us-virginia" | "cn-beijing";
+                                    vertex_openai_project_id?: string;
                                 } | null;
                                 /** @enum {string|null} */
                                 status: "active" | "inactive" | "deleted" | null;
@@ -5941,6 +5944,7 @@ export interface paths {
                                     azure_ai_foundry_api_version?: string;
                                     /** @enum {string} */
                                     alibaba_region?: "singapore" | "us-virginia" | "cn-beijing";
+                                    vertex_openai_project_id?: string;
                                 } | null;
                                 /** @enum {string|null} */
                                 status: "active" | "inactive" | "deleted" | null;
@@ -7444,6 +7448,7 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "active" | "archived" | "deleted";
                                 webSearch: boolean;
+                                pinned: boolean;
                                 shareId: string | null;
                                 /** Format: date-time */
                                 sharedAt: string | null;
@@ -7495,6 +7500,7 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "active" | "archived" | "deleted";
                                 webSearch: boolean;
+                                pinned: boolean;
                                 shareId: string | null;
                                 /** Format: date-time */
                                 sharedAt: string | null;
@@ -7564,6 +7570,7 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "active" | "archived" | "deleted";
                                 webSearch: boolean;
+                                pinned: boolean;
                                 shareId: string | null;
                                 /** Format: date-time */
                                 sharedAt: string | null;
@@ -7623,6 +7630,7 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "active" | "archived" | "deleted";
                                 webSearch: boolean;
+                                pinned: boolean;
                                 shareId: string | null;
                                 /** Format: date-time */
                                 sharedAt: string | null;
@@ -7711,6 +7719,7 @@ export interface paths {
                         title?: string;
                         /** @enum {string} */
                         status?: "active" | "archived";
+                        pinned?: boolean;
                     };
                 };
             };
@@ -7729,6 +7738,7 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "active" | "archived" | "deleted";
                                 webSearch: boolean;
+                                pinned: boolean;
                                 shareId: string | null;
                                 /** Format: date-time */
                                 sharedAt: string | null;

@@ -22,11 +22,15 @@ import { extractApiToken } from "@/lib/extract-api-token.js";
 import { throwIamException, validateModelAccess } from "@/lib/iam.js";
 import { calculateDataStorageCost, insertLog } from "@/lib/logs.js";
 import { createCombinedSignal, isTimeoutError } from "@/lib/timeout-config.js";
+import { getVertexOpenAIAccessToken } from "@/lib/vertex-openai-token.js";
 
 import { getProviderHeaders } from "@llmgateway/actions";
 import { shortid } from "@llmgateway/db";
 import { logger } from "@llmgateway/logger";
-import { models as modelDefinitions } from "@llmgateway/models";
+import {
+	getProviderEnvValue,
+	models as modelDefinitions,
+} from "@llmgateway/models";
 
 import type { ServerTypes } from "@/vars.js";
 import type { InferSelectModel, tables } from "@llmgateway/db";
@@ -191,13 +195,27 @@ function findEmbeddingMapping(modelId: string): {
 	modelDef: ModelDefinition;
 	modelDefId: string;
 } | null {
+	// Split an optional "<provider>/<model>" prefix. When present, only
+	// mappings on that provider are considered — this lets callers pick
+	// e.g. google-vertex/gemini-embedding-001 explicitly when the same
+	// model id also exists on google-ai-studio.
+	let requestedProvider: string | undefined;
+	let modelKey = modelId;
+	const slashIdx = modelId.indexOf("/");
+	if (slashIdx > 0) {
+		requestedProvider = modelId.slice(0, slashIdx);
+		modelKey = modelId.slice(slashIdx + 1);
+	}
 	for (const model of modelDefinitions) {
 		for (const mapping of model.providers) {
 			const candidate = mapping as ProviderModelMapping;
 			if (!candidate.embeddings) {
 				continue;
 			}
-			if (model.id === modelId || candidate.modelName === modelId) {
+			if (requestedProvider && candidate.providerId !== requestedProvider) {
+				continue;
+			}
+			if (model.id === modelKey || candidate.modelName === modelKey) {
 				return { mapping: candidate, modelDef: model, modelDefId: model.id };
 			}
 		}
@@ -444,12 +462,14 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		);
 	})();
 
-	if (isTokenIdInput && providerId === "google-ai-studio") {
+	if (
+		isTokenIdInput &&
+		(providerId === "google-ai-studio" || providerId === "google-vertex")
+	) {
 		return c.json(
 			{
 				error: {
-					message:
-						"Provider google-ai-studio does not support token-ID inputs for embeddings. Pass a string or array of strings instead.",
+					message: `Provider ${providerId} does not support token-ID inputs for embeddings. Pass a string or array of strings instead.`,
 					type: "invalid_request_error",
 					param: "input",
 					code: "unsupported_input",
@@ -602,21 +622,35 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 	const providerBaseUrlDefaults: Partial<Record<string, string>> = {
 		openai: "https://api.openai.com",
 		"google-ai-studio": "https://generativelanguage.googleapis.com",
+		"google-vertex": "https://aiplatform.googleapis.com",
 	};
+	// Env baseUrl override (mirrors the chat handler at
+	// packages/actions/src/get-provider-endpoint.ts): when not using a BYOK
+	// provider key, allow LLM_<PROVIDER>_BASE_URL to redirect upstream
+	// traffic to proxies, regional endpoints, or test mocks.
+	const envBaseUrl =
+		providerKey ||
+		(providerId !== "google-vertex" && providerId !== "google-ai-studio")
+			? undefined
+			: getProviderEnvValue(providerId, "baseUrl", configIndex);
 	const resolvedBaseUrl =
 		providerKey?.baseUrl ??
+		envBaseUrl ??
 		providerBaseUrlDefaults[providerId] ??
 		"https://api.openai.com";
 
 	const isGoogleAiStudio = providerId === "google-ai-studio";
-	const googleInputs: string[] = isGoogleAiStudio
-		? Array.isArray(input)
-			? (input as string[])
-			: [input as string]
-		: [];
+	const isGoogleVertex = providerId === "google-vertex";
+	const googleInputs: string[] =
+		isGoogleAiStudio || isGoogleVertex
+			? Array.isArray(input)
+				? (input as string[])
+				: [input as string]
+			: [];
 
 	let upstreamUrl: string;
 	let requestBody: Record<string, unknown>;
+	let vertexBodies: Array<Record<string, unknown>> = [];
 
 	if (isGoogleAiStudio) {
 		const endpoint =
@@ -642,6 +676,120 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		} else {
 			requestBody = buildSingleRequest(googleInputs[0]);
 		}
+	} else if (isGoogleVertex) {
+		const vertexProjectId =
+			providerKey?.options?.google_vertex_project_id ??
+			getProviderEnvValue("google-vertex", "project", configIndex);
+		if (!vertexProjectId) {
+			return c.json(
+				{
+					error: {
+						message:
+							"Google Vertex requires a project ID. Set LLM_GOOGLE_CLOUD_PROJECT or configure google_vertex_project_id on the provider key.",
+						type: "invalid_request_error",
+						param: null,
+						code: "missing_project_id",
+					},
+				},
+				400,
+			);
+		}
+		const vertexRegion =
+			getProviderEnvValue("google-vertex", "region", configIndex, "global") ??
+			"global";
+
+		// Vertex's PredictionService.{Predict,EmbedContent} reject Express-mode
+		// API keys (API_KEY_SERVICE_BLOCKED / CREDENTIALS_MISSING), so we
+		// require a service-account JSON and mint a short-lived OAuth2 access
+		// token. In credits/hybrid mode the SA JSON contains commas, which the
+		// env round-robin splitter would have mangled — re-read the env var
+		// directly. In api-keys mode the SA JSON is stored intact on the
+		// provider key.
+		const rawCredential = providerKey
+			? usedToken
+			: (process.env.LLM_GOOGLE_VERTEX_API_KEY ?? "");
+		let serviceAccount: { client_email?: unknown } | null = null;
+		try {
+			serviceAccount = JSON.parse(rawCredential) as {
+				client_email?: unknown;
+			};
+		} catch {
+			serviceAccount = null;
+		}
+		if (!serviceAccount || typeof serviceAccount.client_email !== "string") {
+			return c.json(
+				{
+					error: {
+						message:
+							"Google Vertex embeddings require a service-account JSON. Express-mode API keys are not accepted by Vertex's :predict / :embedContent endpoints. Provide service-account JSON via LLM_GOOGLE_VERTEX_API_KEY (credits/hybrid mode) or as the provider key token (api-keys mode).",
+						type: "invalid_request_error",
+						param: null,
+						code: "missing_service_account",
+					},
+				},
+				400,
+			);
+		}
+		try {
+			usedToken = await getVertexOpenAIAccessToken(rawCredential);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			logger.warn("Vertex OAuth token exchange failed", {
+				requestId,
+				provider: providerId,
+				model: upstreamModel,
+				error: message,
+			});
+			if (envVarName !== undefined) {
+				reportKeyError(envVarName, configIndex, 401, message);
+			}
+			if (providerKey?.id) {
+				reportTrackedKeyError(providerKey.id, 401, message);
+			}
+			return c.json(
+				{
+					error: {
+						message: `Failed to obtain Google Vertex OAuth access token from service account: ${message}`,
+						type: "upstream_error",
+						param: null,
+						code: "vertex_oauth_failed",
+					},
+				},
+				502,
+			);
+		}
+
+		// gemini-embedding-2 (multimodal) is documented against Vertex's
+		// v1beta1 :embedContent endpoint (content/parts body, embedding +
+		// usageMetadata response). gemini-embedding-001 uses the legacy
+		// :predict shape (instances[].content, predictions[].embeddings).
+		const useEmbedContent = upstreamModel === "gemini-embedding-2";
+		if (useEmbedContent) {
+			upstreamUrl = `${resolvedBaseUrl}/v1beta1/projects/${vertexProjectId}/locations/${vertexRegion}/publishers/google/models/${upstreamModel}:embedContent`;
+			vertexBodies = googleInputs.map((text) => {
+				const body: Record<string, unknown> = {
+					content: { parts: [{ text }] },
+				};
+				if (dimensions !== undefined) {
+					body.outputDimensionality = dimensions;
+				}
+				return body;
+			});
+		} else {
+			upstreamUrl = `${resolvedBaseUrl}/v1/projects/${vertexProjectId}/locations/${vertexRegion}/publishers/google/models/${upstreamModel}:predict`;
+			// Vertex's gemini-embedding-001 :predict only accepts one instance
+			// per request, so a batch of N inputs becomes N parallel calls.
+			vertexBodies = googleInputs.map((text) => {
+				const body: Record<string, unknown> = {
+					instances: [{ content: text }],
+				};
+				if (dimensions !== undefined) {
+					body.parameters = { outputDimensionality: dimensions };
+				}
+				return body;
+			});
+		}
+		requestBody = vertexBodies[0];
 	} else {
 		upstreamUrl = `${resolvedBaseUrl}/v1/embeddings`;
 		requestBody = {
@@ -689,15 +837,80 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 
 	try {
 		const fetchSignal = createCombinedSignal(controller);
-		upstreamResponse = await fetch(upstreamUrl, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				...getProviderHeaders(providerId, usedToken, { requestId }),
-			},
-			body: JSON.stringify(requestBody),
-			signal: fetchSignal,
-		});
+		if (isGoogleVertex && vertexBodies.length > 1) {
+			const subResponses = await Promise.all(
+				vertexBodies.map((body) =>
+					fetch(upstreamUrl, {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							...getProviderHeaders(providerId, usedToken, { requestId }),
+						},
+						body: JSON.stringify(body),
+						signal: fetchSignal,
+					}),
+				),
+			);
+			const failedIdx = subResponses.findIndex((r) => !r.ok);
+			if (failedIdx >= 0) {
+				upstreamResponse = subResponses[failedIdx];
+			} else {
+				const subTexts = await Promise.all(subResponses.map((r) => r.text()));
+				const subJsons = subTexts.map((text) => {
+					try {
+						return JSON.parse(text) as Record<string, unknown>;
+					} catch {
+						return {} as Record<string, unknown>;
+					}
+				});
+				const isEmbedContentShape = subJsons.some(
+					(j) => j.embedding && typeof j.embedding === "object",
+				);
+				const combinedJson: Record<string, unknown> = isEmbedContentShape
+					? (() => {
+							const embeddings = subJsons.map(
+								(j) =>
+									(j.embedding as Record<string, unknown> | undefined) ?? {},
+							);
+							const totalPromptTokens = subJsons.reduce((sum, j) => {
+								const meta =
+									j.usageMetadata && typeof j.usageMetadata === "object"
+										? (j.usageMetadata as Record<string, unknown>)
+										: undefined;
+								return (
+									sum +
+									(typeof meta?.promptTokenCount === "number"
+										? meta.promptTokenCount
+										: 0)
+								);
+							}, 0);
+							return {
+								embeddings,
+								usageMetadata: { promptTokenCount: totalPromptTokens },
+							};
+						})()
+					: {
+							predictions: subJsons.flatMap((j) =>
+								Array.isArray(j.predictions) ? j.predictions : [],
+							),
+						};
+				upstreamResponse = new Response(JSON.stringify(combinedJson), {
+					status: 200,
+					statusText: "OK",
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+		} else {
+			upstreamResponse = await fetch(upstreamUrl, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					...getProviderHeaders(providerId, usedToken, { requestId }),
+				},
+				body: JSON.stringify(requestBody),
+				signal: fetchSignal,
+			});
+		}
 	} catch (error) {
 		const isCanceled = error instanceof Error && error.name === "AbortError";
 		const isTimeout = isTimeoutError(error);
@@ -959,6 +1172,103 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 			promptTokens = upstreamPromptTokens;
 		} else {
 			promptTokens = estimatedTokens;
+			estimatedUsage = true;
+		}
+		totalTokens = promptTokens;
+		normalizedResponse = {
+			object: "list",
+			data,
+			model: requestedModel,
+			usage: {
+				prompt_tokens: promptTokens,
+				total_tokens: totalTokens,
+			},
+		};
+	} else if (isGoogleVertex) {
+		const upstream =
+			upstreamJson && typeof upstreamJson === "object"
+				? (upstreamJson as Record<string, unknown>)
+				: {};
+		// Two upstream shapes are supported:
+		//   :predict       → { predictions: [{embeddings: {values, statistics: {token_count}}}] }
+		//   :embedContent  → { embedding: {values}, usageMetadata: {promptTokenCount} }
+		// The multi-fetch combiner produces { embeddings: [{values}, ...], usageMetadata }
+		// for :embedContent batches.
+		const wantsBase64 = encoding_format === "base64";
+		interface ValuesAndTokens {
+			values: number[];
+			tokenCount: number | null;
+		}
+		const items: ValuesAndTokens[] = (() => {
+			if (Array.isArray(upstream.predictions)) {
+				return (upstream.predictions as Array<Record<string, unknown>>).map(
+					(prediction) => {
+						const embeddingsObj =
+							prediction.embeddings && typeof prediction.embeddings === "object"
+								? (prediction.embeddings as Record<string, unknown>)
+								: {};
+						const values = Array.isArray(embeddingsObj.values)
+							? (embeddingsObj.values as number[])
+							: [];
+						const stats =
+							embeddingsObj.statistics &&
+							typeof embeddingsObj.statistics === "object"
+								? (embeddingsObj.statistics as Record<string, unknown>)
+								: undefined;
+						const tokenCount =
+							typeof stats?.token_count === "number" ? stats.token_count : null;
+						return { values, tokenCount };
+					},
+				);
+			}
+			if (Array.isArray(upstream.embeddings)) {
+				return (upstream.embeddings as Array<Record<string, unknown>>).map(
+					(emb) => ({
+						values: Array.isArray(emb.values) ? (emb.values as number[]) : [],
+						tokenCount: null,
+					}),
+				);
+			}
+			if (upstream.embedding && typeof upstream.embedding === "object") {
+				const emb = upstream.embedding as Record<string, unknown>;
+				return [
+					{
+						values: Array.isArray(emb.values) ? (emb.values as number[]) : [],
+						tokenCount: null,
+					},
+				];
+			}
+			return [];
+		})();
+		const data = items.map((item, index) => ({
+			object: "embedding" as const,
+			index,
+			embedding: wantsBase64 ? packFloat32Base64(item.values) : item.values,
+		}));
+		// Per-item statistics from :predict come from items[].tokenCount.
+		const perItemTokenSum = items.reduce(
+			(sum, item) => (item.tokenCount !== null ? sum + item.tokenCount : sum),
+			0,
+		);
+		const sawPerItemTokens = items.some((item) => item.tokenCount !== null);
+		// :embedContent reports usage at the top level instead.
+		const topLevelUsage =
+			upstream.usageMetadata && typeof upstream.usageMetadata === "object"
+				? (upstream.usageMetadata as Record<string, unknown>)
+				: undefined;
+		const topLevelPromptTokens =
+			typeof topLevelUsage?.promptTokenCount === "number"
+				? topLevelUsage.promptTokenCount
+				: null;
+		if (sawPerItemTokens) {
+			promptTokens = perItemTokenSum;
+		} else if (topLevelPromptTokens !== null) {
+			promptTokens = topLevelPromptTokens;
+		} else {
+			promptTokens = googleInputs.reduce(
+				(sum, text) => sum + Math.max(1, Math.ceil(text.length / 4)),
+				0,
+			);
 			estimatedUsage = true;
 		}
 		totalTokens = promptTokens;

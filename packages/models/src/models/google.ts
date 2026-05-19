@@ -1874,6 +1874,18 @@ export const googleModels = [
 				jsonOutput: false,
 				embeddings: true,
 			},
+			{
+				providerId: "google-vertex",
+				modelName: "gemini-embedding-001",
+				inputPrice: "0.15e-6",
+				outputPrice: "0",
+				requestPrice: "0",
+				contextSize: 2048,
+				streaming: false,
+				tools: false,
+				jsonOutput: false,
+				embeddings: true,
+			},
 		],
 	},
 	{
@@ -1887,6 +1899,18 @@ export const googleModels = [
 		providers: [
 			{
 				providerId: "google-ai-studio",
+				modelName: "gemini-embedding-2",
+				inputPrice: "0.20e-6",
+				outputPrice: "0",
+				requestPrice: "0",
+				contextSize: 8192,
+				streaming: false,
+				tools: false,
+				jsonOutput: false,
+				embeddings: true,
+			},
+			{
+				providerId: "google-vertex",
 				modelName: "gemini-embedding-2",
 				inputPrice: "0.20e-6",
 				outputPrice: "0",

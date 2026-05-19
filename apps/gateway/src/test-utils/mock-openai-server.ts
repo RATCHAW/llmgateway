@@ -1586,7 +1586,6 @@ const vertexPublisherModelHandler = async (
 		});
 	}
 
-	const body = await c.req.json();
 	const modelPath = c.req.path.split("/models/")[1] ?? "";
 	const [modelName, action] = modelPath.split(":");
 
@@ -1596,8 +1595,12 @@ const vertexPublisherModelHandler = async (
 		action !== "predict" &&
 		action !== "embedContent"
 	) {
+		// Don't consume the request body — let another route handle it (e.g.
+		// :generateContent for chat tests).
 		return await next();
 	}
+
+	const body = await c.req.json();
 
 	if (action === "predictLongRunning") {
 		const prompt =

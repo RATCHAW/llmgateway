@@ -1008,7 +1008,7 @@ describe("api", () => {
 		}
 	});
 
-	test("/v1/embeddings google-vertex batched input", async () => {
+	test("/v1/embeddings google-vertex rejects batched input", async () => {
 		const originalGoogleCloudProject = process.env.LLM_GOOGLE_CLOUD_PROJECT;
 		process.env.LLM_GOOGLE_CLOUD_PROJECT = "test-project";
 		try {
@@ -1028,7 +1028,6 @@ describe("api", () => {
 				baseUrl: mockServerUrl,
 			});
 
-			const inputs = ["first sentence", "second sentence", "third sentence"];
 			const res = await app.request("/v1/embeddings", {
 				method: "POST",
 				headers: {
@@ -1036,26 +1035,18 @@ describe("api", () => {
 					Authorization: "Bearer real-token-embeddings-vertex-batch",
 				},
 				body: JSON.stringify({
-					input: inputs,
+					input: ["first sentence", "second sentence", "third sentence"],
 					model: "google-vertex/gemini-embedding-001",
 				}),
 			});
 
-			expect(res.status).toBe(200);
-
+			expect(res.status).toBe(400);
 			const json = await res.json();
-			expect(json).toHaveProperty("object", "list");
-			expect(Array.isArray(json.data)).toBe(true);
-			expect(json.data).toHaveLength(3);
-			expect(json.data[0].embedding).toHaveLength(3072);
-			expect(json.data[1]).toHaveProperty("index", 1);
-			expect(json.data[2]).toHaveProperty("index", 2);
-			// Token counts sum across the N parallel upstream calls.
-			const expectedUpstreamTokens = inputs.reduce(
-				(sum, text) => sum + Math.max(1, Math.floor(text.length / 5)),
-				0,
-			);
-			expect(json.usage.prompt_tokens).toBe(expectedUpstreamTokens);
+			expect(json.error?.code).toBe("batch_not_supported");
+			expect(json.error?.param).toBe("input");
+			// Message must name the specific model so callers don't read it as
+			// "Vertex doesn't batch" — Vertex's other text-embedding-* models do.
+			expect(json.error?.message).toContain("gemini-embedding-001");
 		} finally {
 			if (originalGoogleCloudProject !== undefined) {
 				process.env.LLM_GOOGLE_CLOUD_PROJECT = originalGoogleCloudProject;

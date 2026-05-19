@@ -20,6 +20,7 @@ Browse available embedding models on the [models page](https://llmgateway.io/mod
   - A **service-account JSON** for `LLM_GOOGLE_VERTEX_API_KEY` (or as the provider-key token). Vertex's `:predict` and `:embedContent` endpoints reject Express-mode API keys (`API_KEY_SERVICE_BLOCKED` / `CREDENTIALS_MISSING`), so the gateway mints a short-lived OAuth2 access token from the SA JSON for embedding requests.
   - `LLM_GOOGLE_CLOUD_PROJECT` (or `google_vertex_project_id` on the provider key).
   - When a model is offered by more than one provider, prefix the id (e.g. `google-vertex/gemini-embedding-001`) to route explicitly.
+  - **Single input per request (for the Gemini embedding models).** `gemini-embedding-001`'s `:predict` and `gemini-embedding-2`'s `:embedContent` each accept exactly one input per upstream call, so the gateway rejects array `input` for these models with `400 batch_not_supported`. Loop on your side or route the same model through `google-ai-studio`, which natively batches via `batchEmbedContents`. (Vertex's older `text-embedding-005` / `text-multilingual-embedding-002` accept up to 5 inputs natively, but those aren't exposed by this gateway yet.)
 
 The gateway translates between provider-native request/response shapes — Google AI Studio's `:embedContent` / `:batchEmbedContents`, Vertex's `:predict` (for `gemini-embedding-001`) and `:embedContent` (for `gemini-embedding-2`) — and the OpenAI-compatible payload, so you can swap models without changing your client code.
 

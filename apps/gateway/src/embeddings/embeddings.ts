@@ -624,15 +624,16 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		"google-ai-studio": "https://generativelanguage.googleapis.com",
 		"google-vertex": "https://aiplatform.googleapis.com",
 	};
-	// Env baseUrl override (mirrors the chat handler at
-	// packages/actions/src/get-provider-endpoint.ts): when not using a BYOK
-	// provider key, allow LLM_<PROVIDER>_BASE_URL to redirect upstream
-	// traffic to proxies, regional endpoints, or test mocks.
+	// Env baseUrl override: LLM_<PROVIDER>_BASE_URL can redirect upstream
+	// traffic to proxies, regional endpoints, or test mocks. Applies even
+	// with a provider key set — providerKey.baseUrl still wins via the ??
+	// chain below, so BYOK callers can opt out by setting their own
+	// baseUrl. Only google-* providers expose a baseUrl env in
+	// packages/models/src/providers.ts.
 	const envBaseUrl =
-		providerKey ||
-		(providerId !== "google-vertex" && providerId !== "google-ai-studio")
-			? undefined
-			: getProviderEnvValue(providerId, "baseUrl", configIndex);
+		providerId === "google-vertex" || providerId === "google-ai-studio"
+			? getProviderEnvValue(providerId, "baseUrl", configIndex)
+			: undefined;
 	const resolvedBaseUrl =
 		providerKey?.baseUrl ??
 		envBaseUrl ??
@@ -650,7 +651,6 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 
 	let upstreamUrl: string;
 	let requestBody: Record<string, unknown>;
-	let vertexBodies: Array<Record<string, unknown>> = [];
 
 	if (isGoogleAiStudio) {
 		const endpoint =
@@ -677,6 +677,28 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 			requestBody = buildSingleRequest(googleInputs[0]);
 		}
 	} else if (isGoogleVertex) {
+		// gemini-embedding-001's :predict and gemini-embedding-2's
+		// :embedContent each accept exactly one input per request (Vertex's
+		// other text-embedding-* models support up to 5, but we don't expose
+		// those here yet). Rather than silently fanning a batch into N
+		// upstream calls — which hides cost, latency, quota consumption,
+		// and partial-failure semantics from the caller — we reject batched
+		// input upfront. Callers can loop on their side or use the same
+		// model via google-ai-studio, which natively batches via
+		// batchEmbedContents.
+		if (googleInputs.length > 1) {
+			return c.json(
+				{
+					error: {
+						message: `Model ${upstreamModel} accepts only one input per request on google-vertex. Pass a single string instead of an array, loop client-side, or use the same model via the google-ai-studio provider which supports native batching via batchEmbedContents.`,
+						type: "invalid_request_error",
+						param: "input",
+						code: "batch_not_supported",
+					},
+				},
+				400,
+			);
+		}
 		const vertexProjectId =
 			providerKey?.options?.google_vertex_project_id ??
 			getProviderEnvValue("google-vertex", "project", configIndex);
@@ -764,32 +786,24 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		// usageMetadata response). gemini-embedding-001 uses the legacy
 		// :predict shape (instances[].content, predictions[].embeddings).
 		const useEmbedContent = upstreamModel === "gemini-embedding-2";
+		const onlyText = googleInputs[0];
 		if (useEmbedContent) {
 			upstreamUrl = `${resolvedBaseUrl}/v1beta1/projects/${vertexProjectId}/locations/${vertexRegion}/publishers/google/models/${upstreamModel}:embedContent`;
-			vertexBodies = googleInputs.map((text) => {
-				const body: Record<string, unknown> = {
-					content: { parts: [{ text }] },
-				};
-				if (dimensions !== undefined) {
-					body.outputDimensionality = dimensions;
-				}
-				return body;
-			});
+			requestBody = {
+				content: { parts: [{ text: onlyText }] },
+			};
+			if (dimensions !== undefined) {
+				requestBody.outputDimensionality = dimensions;
+			}
 		} else {
 			upstreamUrl = `${resolvedBaseUrl}/v1/projects/${vertexProjectId}/locations/${vertexRegion}/publishers/google/models/${upstreamModel}:predict`;
-			// Vertex's gemini-embedding-001 :predict only accepts one instance
-			// per request, so a batch of N inputs becomes N parallel calls.
-			vertexBodies = googleInputs.map((text) => {
-				const body: Record<string, unknown> = {
-					instances: [{ content: text }],
-				};
-				if (dimensions !== undefined) {
-					body.parameters = { outputDimensionality: dimensions };
-				}
-				return body;
-			});
+			requestBody = {
+				instances: [{ content: onlyText }],
+			};
+			if (dimensions !== undefined) {
+				requestBody.parameters = { outputDimensionality: dimensions };
+			}
 		}
-		requestBody = vertexBodies[0];
 	} else {
 		upstreamUrl = `${resolvedBaseUrl}/v1/embeddings`;
 		requestBody = {
@@ -837,80 +851,15 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 
 	try {
 		const fetchSignal = createCombinedSignal(controller);
-		if (isGoogleVertex && vertexBodies.length > 1) {
-			const subResponses = await Promise.all(
-				vertexBodies.map((body) =>
-					fetch(upstreamUrl, {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							...getProviderHeaders(providerId, usedToken, { requestId }),
-						},
-						body: JSON.stringify(body),
-						signal: fetchSignal,
-					}),
-				),
-			);
-			const failedIdx = subResponses.findIndex((r) => !r.ok);
-			if (failedIdx >= 0) {
-				upstreamResponse = subResponses[failedIdx];
-			} else {
-				const subTexts = await Promise.all(subResponses.map((r) => r.text()));
-				const subJsons = subTexts.map((text) => {
-					try {
-						return JSON.parse(text) as Record<string, unknown>;
-					} catch {
-						return {} as Record<string, unknown>;
-					}
-				});
-				const isEmbedContentShape = subJsons.some(
-					(j) => j.embedding && typeof j.embedding === "object",
-				);
-				const combinedJson: Record<string, unknown> = isEmbedContentShape
-					? (() => {
-							const embeddings = subJsons.map(
-								(j) =>
-									(j.embedding as Record<string, unknown> | undefined) ?? {},
-							);
-							const totalPromptTokens = subJsons.reduce((sum, j) => {
-								const meta =
-									j.usageMetadata && typeof j.usageMetadata === "object"
-										? (j.usageMetadata as Record<string, unknown>)
-										: undefined;
-								return (
-									sum +
-									(typeof meta?.promptTokenCount === "number"
-										? meta.promptTokenCount
-										: 0)
-								);
-							}, 0);
-							return {
-								embeddings,
-								usageMetadata: { promptTokenCount: totalPromptTokens },
-							};
-						})()
-					: {
-							predictions: subJsons.flatMap((j) =>
-								Array.isArray(j.predictions) ? j.predictions : [],
-							),
-						};
-				upstreamResponse = new Response(JSON.stringify(combinedJson), {
-					status: 200,
-					statusText: "OK",
-					headers: { "Content-Type": "application/json" },
-				});
-			}
-		} else {
-			upstreamResponse = await fetch(upstreamUrl, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					...getProviderHeaders(providerId, usedToken, { requestId }),
-				},
-				body: JSON.stringify(requestBody),
-				signal: fetchSignal,
-			});
-		}
+		upstreamResponse = await fetch(upstreamUrl, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...getProviderHeaders(providerId, usedToken, { requestId }),
+			},
+			body: JSON.stringify(requestBody),
+			signal: fetchSignal,
+		});
 	} catch (error) {
 		const isCanceled = error instanceof Error && error.name === "AbortError";
 		const isTimeout = isTimeoutError(error);
@@ -1189,69 +1138,45 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 			upstreamJson && typeof upstreamJson === "object"
 				? (upstreamJson as Record<string, unknown>)
 				: {};
-		// Two upstream shapes are supported:
+		// Single-input contract enforced earlier in the handler. Two upstream
+		// response shapes (one per endpoint) — both yield exactly one vector:
 		//   :predict       → { predictions: [{embeddings: {values, statistics: {token_count}}}] }
 		//   :embedContent  → { embedding: {values}, usageMetadata: {promptTokenCount} }
-		// The multi-fetch combiner produces { embeddings: [{values}, ...], usageMetadata }
-		// for :embedContent batches.
 		const wantsBase64 = encoding_format === "base64";
-		interface ValuesAndTokens {
-			values: number[];
-			tokenCount: number | null;
+		let values: number[] = [];
+		let perItemTokens: number | null = null;
+		if (Array.isArray(upstream.predictions)) {
+			const prediction =
+				upstream.predictions[0] && typeof upstream.predictions[0] === "object"
+					? (upstream.predictions[0] as Record<string, unknown>)
+					: {};
+			const embeddingsObj =
+				prediction.embeddings && typeof prediction.embeddings === "object"
+					? (prediction.embeddings as Record<string, unknown>)
+					: {};
+			values = Array.isArray(embeddingsObj.values)
+				? (embeddingsObj.values as number[])
+				: [];
+			const stats =
+				embeddingsObj.statistics && typeof embeddingsObj.statistics === "object"
+					? (embeddingsObj.statistics as Record<string, unknown>)
+					: undefined;
+			perItemTokens =
+				typeof stats?.token_count === "number" ? stats.token_count : null;
+		} else if (upstream.embedding && typeof upstream.embedding === "object") {
+			const emb = upstream.embedding as Record<string, unknown>;
+			values = Array.isArray(emb.values) ? (emb.values as number[]) : [];
 		}
-		const items: ValuesAndTokens[] = (() => {
-			if (Array.isArray(upstream.predictions)) {
-				return (upstream.predictions as Array<Record<string, unknown>>).map(
-					(prediction) => {
-						const embeddingsObj =
-							prediction.embeddings && typeof prediction.embeddings === "object"
-								? (prediction.embeddings as Record<string, unknown>)
-								: {};
-						const values = Array.isArray(embeddingsObj.values)
-							? (embeddingsObj.values as number[])
-							: [];
-						const stats =
-							embeddingsObj.statistics &&
-							typeof embeddingsObj.statistics === "object"
-								? (embeddingsObj.statistics as Record<string, unknown>)
-								: undefined;
-						const tokenCount =
-							typeof stats?.token_count === "number" ? stats.token_count : null;
-						return { values, tokenCount };
-					},
-				);
-			}
-			if (Array.isArray(upstream.embeddings)) {
-				return (upstream.embeddings as Array<Record<string, unknown>>).map(
-					(emb) => ({
-						values: Array.isArray(emb.values) ? (emb.values as number[]) : [],
-						tokenCount: null,
-					}),
-				);
-			}
-			if (upstream.embedding && typeof upstream.embedding === "object") {
-				const emb = upstream.embedding as Record<string, unknown>;
-				return [
-					{
-						values: Array.isArray(emb.values) ? (emb.values as number[]) : [],
-						tokenCount: null,
-					},
-				];
-			}
-			return [];
-		})();
-		const data = items.map((item, index) => ({
-			object: "embedding" as const,
-			index,
-			embedding: wantsBase64 ? packFloat32Base64(item.values) : item.values,
-		}));
-		// Per-item statistics from :predict come from items[].tokenCount.
-		const perItemTokenSum = items.reduce(
-			(sum, item) => (item.tokenCount !== null ? sum + item.tokenCount : sum),
-			0,
-		);
-		const sawPerItemTokens = items.some((item) => item.tokenCount !== null);
-		// :embedContent reports usage at the top level instead.
+		const data = [
+			{
+				object: "embedding" as const,
+				index: 0,
+				embedding: wantsBase64 ? packFloat32Base64(values) : values,
+			},
+		];
+		// :predict reports usage per-prediction; :embedContent reports it at
+		// the top level. Fall back to a char-based estimate only if neither
+		// is present.
 		const topLevelUsage =
 			upstream.usageMetadata && typeof upstream.usageMetadata === "object"
 				? (upstream.usageMetadata as Record<string, unknown>)
@@ -1260,15 +1185,12 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 			typeof topLevelUsage?.promptTokenCount === "number"
 				? topLevelUsage.promptTokenCount
 				: null;
-		if (sawPerItemTokens) {
-			promptTokens = perItemTokenSum;
+		if (perItemTokens !== null) {
+			promptTokens = perItemTokens;
 		} else if (topLevelPromptTokens !== null) {
 			promptTokens = topLevelPromptTokens;
 		} else {
-			promptTokens = googleInputs.reduce(
-				(sum, text) => sum + Math.max(1, Math.ceil(text.length / 4)),
-				0,
-			);
+			promptTokens = Math.max(1, Math.ceil(googleInputs[0].length / 4));
 			estimatedUsage = true;
 		}
 		totalTokens = promptTokens;

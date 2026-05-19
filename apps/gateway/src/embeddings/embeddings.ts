@@ -625,15 +625,12 @@ embeddings.openapi(createEmbeddings, async (c): Promise<any> => {
 		"google-vertex": "https://aiplatform.googleapis.com",
 	};
 	// Env baseUrl override: LLM_<PROVIDER>_BASE_URL can redirect upstream
-	// traffic to proxies, regional endpoints, or test mocks. Applies even
-	// with a provider key set — providerKey.baseUrl still wins via the ??
-	// chain below, so BYOK callers can opt out by setting their own
-	// baseUrl. Only google-* providers expose a baseUrl env in
-	// packages/models/src/providers.ts.
-	const envBaseUrl =
-		providerId === "google-vertex" || providerId === "google-ai-studio"
-			? getProviderEnvValue(providerId, "baseUrl", configIndex)
-			: undefined;
+	// traffic to proxies, regional endpoints, or test mocks. Applies to
+	// any provider — getProviderEnvValue returns undefined for providers
+	// that don't declare a baseUrl env in packages/models/src/providers.ts,
+	// so the ?? chain falls through safely. providerKey.baseUrl still wins
+	// when set, so BYOK callers can opt out by configuring their own.
+	const envBaseUrl = getProviderEnvValue(providerId, "baseUrl", configIndex);
 	const resolvedBaseUrl =
 		providerKey?.baseUrl ??
 		envBaseUrl ??
